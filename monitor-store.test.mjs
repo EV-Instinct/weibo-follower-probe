@@ -72,3 +72,15 @@ test('文件冲突保留批次并报错；账号隔离和重复绑定检查',t=>
   store.ingest(b.id,scan(ids(1),true,'2345678901'))
   assert.equal(store.account(b.id).pending,1)
 })
+test('导出目录不可用时不丢批次，恢复后生成唯一文件',t=>{
+  const env=setup(t),{a,root}=env
+  env.store.ingest(a.id,scan([]));env.store.ingest(a.id,scan(ids(60)))
+  writeFileSync(join(root,'exports'),'模拟路径被文件占用')
+  assert.throws(()=>env.store.flush())
+  assert.equal(env.store.account(a.id).waiting_files,1)
+  rmSync(join(root,'exports'))
+  env.reopen();env.store.flush()
+  assert.equal(env.store.account(a.id).waiting_files,0)
+  assert.equal(env.store.batches(a.id).length,1)
+  assert.equal(env.store.batches(a.id)[0].status,'ready')
+})

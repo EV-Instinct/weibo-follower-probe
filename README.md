@@ -1,4 +1,16 @@
-# 微博粉丝 UID 验证工具
+# 微博粉丝助手
+
+当前已提供本地中文管理界面、多账号独立档案、可见粉丝列表连续滚动读取、初始 UID 记录、永久去重、定时检查及每 60 个 UID 自动导出。
+
+**直接使用：**打开 `dist/微博粉丝助手_0.1.0`，双击 `启动微博粉丝助手.cmd`。便携包自带 Node.js，只需本机已安装 Microsoft Edge。详见 [使用说明](使用说明.md)。
+
+**源码运行：** `npm.cmd start`；**测试：** `npm.cmd test`；**打包：** `npm.cmd run build`；**便携包验证：** `node portable-smoke.mjs`。
+
+正式管理界面使用 `http://127.0.0.1:8766/`，原验证工具保留在 8765，使用 `npm.cmd run probe` 启动。真实数据保存在 `%LOCALAPPDATA%\WeiboFollowerProbe`，不在源码或便携包中。
+
+统计采用用户确认的“可见列表 UID 差异”口径。初始化已有粉丝不导出，读不全的轮次不直接确认新增。未覆盖隐藏账号或两轮间短暂关注，详情及验证范围见使用说明。
+
+以下保留早期验证工具说明，历史阶段记录不代表正式应用当前功能状态。
 
 ## A 账号真实读取
 
@@ -11,7 +23,7 @@ npm.cmd run read:a
 
 如果 A 的独立 Edge 窗口仍开着，先关闭该窗口。命令使用 `%LOCALAPPDATA%\WeiboFollowerProbe\profiles\A` 中的既有档案。若命令提示登录，在打开的微博窗口里自行登录，完成后回到命令行按 Enter。
 
-命令通过顶部头像和自己的主页交叉核对 UID，从「我的粉丝」进入同一账号的粉丝区，选用「关注时间倒序」，读取一段已渲染的粉丝卡片。观测保存在 `%LOCALAPPDATA%\WeiboFollowerProbe\weibo-a-observations.json`，首次读取为历史样本。命令行只显示覆盖情况和结果统计。多段滚动、全量覆盖、确认新增、导出及轮询尚未验收。见 [第二阶段验证记录](第二阶段验证记录.md)。
+命令通过顶部头像和自己的主页交叉核对 UID，从「我的粉丝」进入同一账号的粉丝区，选用「关注时间倒序」，连续滚动读取已渲染的粉丝卡片。观测保存在 `%LOCALAPPDATA%\WeiboFollowerProbe\weibo-a-observations.json`。此命令仅用于采集诊断，新增比较、定时调度和导出使用上方的正式管理界面。
 
 ## 本机 Edge 自动化验证
 
@@ -24,7 +36,7 @@ npm.cmd test
 
 仅运行浏览器测试可用 `node --test edge-fixture.test.mjs`。测试启动本机 Edge，无需安装其他浏览器。测试页与测试 UID 均为环回模拟数据，档案和证据文件放在临时目录，测试完成后清理。
 
-[browser-round.mjs](browser-round.mjs) 提供识别登录者、进入粉丝区域、核对归属及遍历窗口的流程。[weibo-a.mjs](weibo-a.mjs) 实现 A 的真实页面适配，当前只读一个窗口。每轮保存开始和结束时间、账号归属、逐段 UID、标题计数、去重数、覆盖和结束原因。身份冲突或访问拦截时保存无归属的状态，丢弃该轮 UID。
+[browser-round.mjs](browser-round.mjs) 提供识别登录者、进入粉丝区域、核对归属及遍历窗口的流程。[weibo-a.mjs](weibo-a.mjs) 提供真实页面适配及连续滚动能力，正式应用通过 [monitor-browser.mjs](monitor-browser.mjs) 复用到多个独立账号。身份冲突或访问拦截时丢弃该轮 UID，不挂到错误账号。
 
 ## 手动取样工具
 

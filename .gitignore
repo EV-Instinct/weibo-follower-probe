@@ -5,3 +5,9 @@ observations.json
 observations.json.*.tmp
 weibo-a-observations.json*
 profiles/
+dist/
+.build/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+exports/

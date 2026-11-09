@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node probe.mjs",
+    "start": "node --disable-warning=ExperimentalWarning monitor-app.mjs --open",
+    "probe": "node probe.mjs",
+    "build": "node build-portable.mjs",
     "read:a": "node read-a.mjs",
     "test": "node --test --test-concurrency=1"
   },

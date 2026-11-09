@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="csrf-token" content="{{CSRF}}"><title>微博粉丝助手</title><link rel="stylesheet" href="/monitor.css"><script type="module" src="/monitor.js"></script></head>
+<body>
+  <header><div class="brand"><span class="brand-mark">微</span><div><h1>微博粉丝助手</h1><p>多账号记录 · UID 永久去重 · 满 60 个自动出文件</p></div></div><button id="exit" class="quiet">退出程序</button></header>
+  <main>
+    <div class="overview"><div><span>管理账号</span><strong id="account-count">0</strong></div><div><span>今日新增 · 按发现时间</span><strong id="today-count">0</strong></div><div><span>待凑满 60 个</span><strong id="pending-count">0</strong></div><div><span>已生成文件</span><strong id="batch-count">0</strong></div></div>
+    <section class="workspace" aria-labelledby="accounts-title">
+      <div class="toolbar"><div><h2 id="accounts-title">我的账号</h2><p id="activity">等待添加账号</p></div><div class="actions"><button id="folder">打开导出文件夹</button><button id="history">导出记录</button><button id="add" class="primary">添加账号</button></div></div>
+      <div id="alert" role="alert" hidden></div>
+      <div class="table-wrap"><table><thead><tr><th>账号</th><th>状态</th><th>粉丝 / 本轮读取</th><th>今日新增</th><th>待导出</th><th>最近成功检查</th><th>操作</th></tr></thead><tbody id="accounts"></tbody></table></div>
+      <div id="empty" hidden><h3>先添加一个微博账号</h3><p>填写备注后点击“登录账号”，在微博窗口自行登录。登录成功后会自动记录已有粉丝并开始检查。</p><button id="empty-add" class="primary">添加第一个账号</button></div>
+    </section>
+    <aside class="notes"><h2>这样使用</h2><p><b>第一次：</b>已有粉丝只建立记录，不导出。<b>之后：</b>按设定间隔比较 UID，同一账号不会重复输出同一个人。</p><p>仅统计微博页面可读取的粉丝。页面隐藏的账号，以及两次检查之间关注又取关的人，可能无法记录。读取不完整时保留候选，等待完整读取后处理。</p><p>关闭这个窗口后后台仍会检查；彻底停止请点击“退出程序”。电脑关机、休眠或断网期间无法监测。</p><p class="path">导出位置：<span id="export-path"></span></p></aside>
+  </main>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="account-dialog"><form id="account-form"><h2 id="dialog-title">添加账号</h2><label>账号备注<input id="label" name="label" maxlength="80" required placeholder="例如：主账号、工作号"></label><label id="interval-field" hidden>检查间隔（分钟）<input id="interval" type="number" min="2" max="1440" value="5"></label><p>登录在微博官方页面完成，不需要在这里填写密码。</p><div class="dialog-actions"><button type="button" data-close>取消</button><button type="submit" class="primary">保存账号</button></div></form></dialog>
+  <dialog id="history-dialog"><div class="toolbar"><h2>导出记录</h2><button data-close>关闭</button></div><p>每份自动文件包含 60 个 UID；手动导出的尾数按实际数量标注。显示最近 200 个批次。</p><div id="batches"></div></dialog>
+  <dialog id="confirm-dialog"><h2 id="confirm-title"></h2><p id="confirm-text"></p><div class="dialog-actions"><button data-close>取消</button><button id="confirm-yes" class="primary">确定</button></div></dialog>
+</body></html>
