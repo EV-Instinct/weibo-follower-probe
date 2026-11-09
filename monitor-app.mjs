@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import { existsSync,readFileSync,mkdirSync,copyFileSync } from 'node:fs'
+import { existsSync,readFileSync,mkdirSync,copyFileSync,rmSync } from 'node:fs'
 import { dirname,join,resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
@@ -10,7 +10,14 @@ import { BrowserReader,edgeExecutable } from './monitor-browser.mjs'
 import { MonitorService } from './monitor-service.mjs'
 
 const here=dirname(fileURLToPath(import.meta.url))
+const isTestEnv = typeof process !== 'undefined' && Boolean(
+  process.env?.NODE_TEST_CONTEXT ||
+  process.env?.NODE_ENV === 'test' ||
+  process.argv?.some(a => a.includes('.test.')) ||
+  process.execArgv?.some(a => a.startsWith('--test'))
+)
 async function openLocal(exe,args) {
+  if (isTestEnv && exe === 'explorer.exe') return
   const child=spawn(exe,args,{stdio:'ignore',detached:true,windowsHide:true})
   await once(child,'spawn');child.unref()
 }
@@ -33,6 +40,11 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
         if(path==='/favicon.ico')return res.writeHead(204).end()
         if(path==='/api/state')return json(res,200,{app:'weibo-follower-monitor',accounts:store.accounts(),activeId:service.activeId,activeIds:[...service.activeIds],concurrency:service.concurrency,loginId:service.reader.login?.id??null,exportError:service.exportError,exportRoot:store.exportRoot,dataRoot:root})
         if(path==='/api/batches')return json(res,200,store.batches().slice(0,200).map(b=>({...b,label:store.account(b.account_id).label})))
+        const detailMatch=path.match(/^\/api\/accounts\/([a-f0-9-]+)\/detail$/)
+        if(detailMatch){
+          try{return json(res,200,store.accountDetail(detailMatch[1]))}
+          catch{return json(res,404,{error:'找不到该账号。'})}
+        }
         const fileMatch=path.match(/^\/api\/batches\/(\d+)\/file$/)
         if(fileMatch){
           const batch=store.batches().find(b=>b.id===Number(fileMatch[1]))
@@ -58,7 +70,45 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
       if(path==='/api/folder'){mkdirSync(store.exportRoot,{recursive:true});await openLocal('explorer.exe',[store.exportRoot]);return json(res,200,{ok:true})}
       if(path==='/api/retry-exports'){store.flush();service.exportError='';return json(res,200,{ok:true})}
       if(path==='/api/stop'){json(res,200,{ok:true});setTimeout(()=>app.close(),50);return}
-      const match=path.match(/^\/api\/accounts\/([a-f0-9-]+)\/(login|cancel-login|start|pause|check|tail|settings)$/)
+      if(path==='/api/batch-actions'){
+        const action=input.action
+        if(action==='start'){
+          let count=0
+          for(const a of store.accounts()){
+            if(a.status!=='needs-login'&&a.status!=='logging-in'&&a.owner){
+              store.update(a.id,{enabled:1,next_due:0});service.enqueue(a.id);count++
+            }
+          }
+          return json(res,200,{ok:true,count})
+        }
+        if(action==='pause'){
+          for(const a of store.accounts())service.pause(a.id)
+          return json(res,200,{ok:true})
+        }
+        if(action==='tail'){
+          const created=store.flush({tail:true})
+          return json(res,200,{ok:true,count:created.length})
+        }
+        throw Error('未知的批量操作。')
+      }
+      const batchActionMatch=path.match(/^\/api\/batches\/(\d+)\/(open|content)$/)
+      if(batchActionMatch){
+        const batchId=Number(batchActionMatch[1]),batchAct=batchActionMatch[2]
+        const batch=store.batches().find(b=>b.id===batchId)
+        if(!batch||batch.status!=='ready')throw Error('文件尚未生成。')
+        const destination=join(store.exportRoot,batch.relative_path)
+        if(!existsSync(destination))store.flush()
+        if(!existsSync(destination))throw Error('找不到导出的文件。')
+        if(batchAct==='open'){
+          await openLocal('explorer.exe',[`/select,${destination}`])
+          return json(res,200,{ok:true})
+        }
+        if(batchAct==='content'){
+          const content=readFileSync(destination,'utf8')
+          return json(res,200,{ok:true,content})
+        }
+      }
+      const match=path.match(/^\/api\/accounts\/([a-f0-9-]+)\/(login|cancel-login|start|pause|check|tail|settings|folder|delete)$/)
       if(!match)return json(res,404,{error:'操作不存在。'})
       const [,id,action]=match,a=store.account(id)
       if(action==='login')await service.login(id)
@@ -71,6 +121,25 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
         const interval=Number(input.interval),label=String(input.label??a.label).trim()
         if(!Number.isInteger(interval)||interval<2||interval>1440||!label||label.length>80)throw Error('间隔请输入2～1440分钟，备注不超过80字。')
         store.update(id,{label,interval_minutes:interval,next_due:Date.now()+interval*60000})
+      }
+      if(action==='folder'){
+        const rawName=(a.label?.trim()||a.nickname?.trim()||'未命名')
+        const safeName=rawName.replace(/[\\/:*?"<>|]/g,'').slice(0,30).trim()||'未命名'
+        const safeOwner=(a.owner||a.profile||'unknown').replace(/[\\/:*?"<>|]/g,'')
+        const dirName=`${safeName}_${safeOwner}`
+        const accountDir=join(store.exportRoot,dirName)
+        mkdirSync(accountDir,{recursive:true})
+        await openLocal('explorer.exe',[accountDir])
+        return json(res,200,{ok:true})
+      }
+      if(action==='delete'){
+        if(service.activeIds.has(id))throw Error('账号正在读取中，无法删除。')
+        if(service.reader.login?.id===id)throw Error('账号正在登录中，无法删除。')
+        service.queue.delete(id)
+        const deleted=store.deleteAccount(id)
+        const profileDir=join(root,'profiles',deleted.profile)
+        if(existsSync(profileDir))rmSync(profileDir,{recursive:true,force:true})
+        return json(res,200,{ok:true})
       }
       return json(res,200,{ok:true})
     } catch(e){const message=e instanceof Error&&/^[\u4e00-\u9fff]/.test(e.message)?e.message:'操作失败，请检查数据目录和浏览器状态。';return json(res,400,{error:message})}
@@ -105,11 +174,11 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   if(!Number.isInteger(port)||port<1||port>65535)throw Error('本地端口无效。')
   createMonitorApp({port,root:process.env.WEIBO_MONITOR_DATA_DIR}).then(async app=>{
     console.log(`微博粉丝助手 ${app.address}`)
-    if(process.argv.includes('--open'))await openLocal(edgeExecutable(),[`--app=${app.address}`])
+    if(process.argv.includes('--open'))await openLocal(edgeExecutable(),[`--app=${app.address}`,'--window-size=1280,820'])
     process.once('SIGINT',()=>app.close());process.once('SIGTERM',()=>app.close())
   }).catch(async e=>{
     if(e.code==='EADDRINUSE'&&process.argv.includes('--open')){
-      try{const res=await fetch(`http://127.0.0.1:${port}/api/state`);if((await res.json()).app==='weibo-follower-monitor'){await openLocal(edgeExecutable(),[`--app=http://127.0.0.1:${port}/`]);return}}catch{}
+      try{const res=await fetch(`http://127.0.0.1:${port}/api/state`);if((await res.json()).app==='weibo-follower-monitor'){await openLocal(edgeExecutable(),[`--app=http://127.0.0.1:${port}/`,'--window-size=1280,820']);return}}catch{}
     }
     console.error('启动失败，请检查端口是否被占用，以及数据目录是否可写。');process.exitCode=1
   })

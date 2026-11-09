@@ -110,6 +110,9 @@ export class MonitorStore {
         if (!scanCols.has('mode')) {
           this.db.exec('ALTER TABLE scans ADD COLUMN mode TEXT;')
         }
+        if (!scanCols.has('added')) {
+          this.db.exec('ALTER TABLE scans ADD COLUMN added INTEGER;')
+        }
       }
     }
 
@@ -128,7 +131,7 @@ export class MonitorStore {
         confirmed_at TEXT, batch_id INTEGER REFERENCES batches(id), PRIMARY KEY(account_id,uid));
       CREATE INDEX IF NOT EXISTS pending ON followers(account_id,kind,batch_id);
       CREATE TABLE IF NOT EXISTS scans(id INTEGER PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id), at TEXT NOT NULL,
-        complete INTEGER NOT NULL, total INTEGER, read_count INTEGER NOT NULL, reason TEXT NOT NULL, mode TEXT);
+        complete INTEGER NOT NULL, total INTEGER, read_count INTEGER NOT NULL, reason TEXT NOT NULL, mode TEXT, added INTEGER);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       INSERT OR IGNORE INTO settings(key, value) VALUES('concurrency', '1');
     `)
@@ -194,6 +197,42 @@ export class MonitorStore {
     return this.db.prepare('SELECT id FROM accounts ORDER BY rowid').all().map(r => this.account(r.id))
   }
 
+  deleteAccount(id) {
+    return this.transaction(() => {
+      const a = this.account(id)
+      this.db.prepare('DELETE FROM scans WHERE account_id=?').run(id)
+      this.db.prepare('DELETE FROM followers WHERE account_id=?').run(id)
+      this.db.prepare('DELETE FROM batches WHERE account_id=?').run(id)
+      this.db.prepare('DELETE FROM accounts WHERE id=?').run(id)
+      return a
+    })
+  }
+
+  accountDetail(id) {
+    const account = this.account(id)
+    const recent_followers = this.db.prepare(`
+      SELECT uid, kind, first_seen, confirmed_at, (batch_id IS NOT NULL) AS is_exported
+      FROM followers
+      WHERE account_id=? AND kind IN ('new', 'candidate')
+      ORDER BY rowid DESC
+      LIMIT 100
+    `).all(id)
+    const batches = this.batches(id)
+    const recent_scans = this.db.prepare(`
+      SELECT at, complete, total, read_count, reason, mode, added
+      FROM scans
+      WHERE account_id=?
+      ORDER BY id DESC
+      LIMIT 20
+    `).all(id)
+    const unexported_uids = this.db.prepare(`
+      SELECT uid FROM followers
+      WHERE account_id=? AND kind='new' AND batch_id IS NULL
+      ORDER BY confirmed_at, first_seen, uid
+    `).all(id).map(r => r.uid)
+    return { account, recent_followers, batches, recent_scans, unexported_uids }
+  }
+
   update(id, values) {
     this.account(id)
     const allowed = new Set(['label', 'enabled', 'interval_minutes', 'status', 'message', 'last_attempt', 'last_success', 'next_due', 'failures', 'nickname', 'full_scan_needed', 'blocked_count'])
@@ -222,7 +261,7 @@ export class MonitorStore {
       if (scan.reason === 'legacy-history-import') {
         const ins = this.db.prepare("INSERT OR IGNORE INTO followers(account_id, uid, kind, first_seen, confirmed_at) VALUES(?, ?, 'historical', ?, NULL)")
         for (const uid of uids) ins.run(id, uid, at)
-        this.db.prepare('INSERT INTO scans(account_id, at, complete, total, read_count, reason, mode) VALUES(?, ?, 0, ?, ?, ?, ?)').run(
+        this.db.prepare('INSERT INTO scans(account_id, at, complete, total, read_count, reason, mode, added) VALUES(?, ?, 0, ?, ?, ?, ?, 0)').run(
           id, at, scan.total ?? null, uids.length, scan.reason, 'legacy')
         return { baseline: false, added: 0, complete: false, mode: 'legacy' }
       }
@@ -312,8 +351,8 @@ export class MonitorStore {
         }
       }
 
-      this.db.prepare('INSERT INTO scans(account_id, at, complete, total, read_count, reason, mode) VALUES(?, ?, ?, ?, ?, ?, ?)').run(
-        id, at, complete ? 1 : 0, scan.total ?? null, uids.length, scan.reason ?? 'unknown', mode)
+      this.db.prepare('INSERT INTO scans(account_id, at, complete, total, read_count, reason, mode, added) VALUES(?, ?, ?, ?, ?, ?, ?, ?)').run(
+        id, at, complete ? 1 : 0, scan.total ?? null, uids.length, scan.reason ?? 'unknown', mode, added)
       this.db.prepare('DELETE FROM scans WHERE account_id=? AND id NOT IN (SELECT id FROM scans WHERE account_id=? ORDER BY id DESC LIMIT 100)').run(id, id)
 
       return { baseline: mode === 'baseline' && complete, added, complete, mode }
