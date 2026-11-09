@@ -19,14 +19,14 @@ async function launch(file){
 async function post(path,data){const html=await(await fetch(address)).text(),csrf=html.match(/name="csrf-token" content="([^"]+)"/)[1];return fetch(address+path,{method:'POST',headers:{Origin:new URL(address).origin,'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(data)})}
 async function stop(){await post('api/stop',{});for(let i=0;i<100;i++){try{await fetch(address+'api/state')}catch{return}await new Promise(r=>setTimeout(r,50))}throw Error('后台未退出')}
 try {
-  const first=await launch(join(project,'dist','微博粉丝助手_0.2.1','微博粉丝助手.exe'))
-  assert.equal(first.version,'0.2.1');assert.equal(first.accounts.length,0)
-  const added=await post('api/accounts',{label:'独立启动验证'});assert.equal(added.status,200)
+  const first=await launch(join(project,'dist','微博粉丝助手_0.3.0','微博粉丝助手.exe'))
+  assert.equal(first.version,'0.3.0');assert.equal(first.targets.length,0)
+  const added=await post('api/targets',{uid:'90010001',label:'独立启动验证'});assert.equal(added.status,200)
   const repeated=await launch(join(project,'启动新版微博粉丝助手.exe'))
-  assert.equal(repeated.pid,first.pid);assert.equal(repeated.databaseId,first.databaseId);assert.equal(repeated.accounts.length,1)
+  assert.equal(repeated.pid,first.pid);assert.equal(repeated.databaseId,first.databaseId);assert.equal(repeated.targets.length,1)
   await stop()
   const restarted=await launch(join(project,'启动新版微博粉丝助手.exe'))
-  assert.equal(restarted.accounts.length,1);assert.equal(restarted.databaseId,first.databaseId)
+  assert.equal(restarted.targets.length,1);assert.equal(restarted.databaseId,first.databaseId)
   await stop()
   console.log('EXE：独立启动、重复点击复用同一进程、根目录入口、重启保留数据，全部通过。')
 }finally{

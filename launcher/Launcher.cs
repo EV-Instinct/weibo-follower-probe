@@ -8,7 +8,7 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 internal static class Launcher {
-    private const string Version = "0.2.1";
+    private const string Version = "0.3.0";
     private static string origin;
     private static string dataRoot;
     private static bool verify;
@@ -18,10 +18,11 @@ internal static class Launcher {
         verify = Array.IndexOf(args, "--verify") >= 0;
         try {
             string home = AppDomain.CurrentDomain.BaseDirectory;
+            string exportHome = Path.Combine(home, "粉丝UID导出");
             if (!File.Exists(Path.Combine(home, "runtime", "node.exe")))
                 home = Path.Combine(home, "dist", "微博粉丝助手_" + Version);
             string node = Path.Combine(home, "runtime", "node.exe");
-            string app = Path.Combine(home, "app", "monitor-app.mjs");
+            string app = Path.Combine(home, "app", "watch-app.mjs");
             if (!File.Exists(node) || !File.Exists(app))
                 throw new Exception("没有找到程序组件。请保留整个软件文件夹，或使用项目目录中的新版启动文件。");
             dataRoot = Environment.GetEnvironmentVariable("WEIBO_MONITOR_DATA_DIR");
@@ -45,6 +46,7 @@ internal static class Launcher {
                         info.WorkingDirectory = Path.Combine(home, "app");
                         info.EnvironmentVariables["WEIBO_MONITOR_DATA_DIR"] = dataRoot;
                         info.EnvironmentVariables["WEIBO_MONITOR_PORT"] = portText;
+                        info.EnvironmentVariables["WEIBO_MONITOR_EXPORT_DIR"] = exportHome;
                         using (Process child = Process.Start(info)) {
                             DateTime deadline = DateTime.UtcNow.AddSeconds(40);
                             do {

@@ -1,10 +1,10 @@
 {
   "name": "weibo-follower-probe",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning monitor-app.mjs --open",
+    "start": "node --disable-warning=ExperimentalWarning watch-app.mjs --open",
     "probe": "node probe.mjs",
     "build": "node build-portable.mjs",
     "read:a": "node read-a.mjs",
