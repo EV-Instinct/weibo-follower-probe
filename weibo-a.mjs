@@ -1,0 +1,143 @@
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { collectRound } from './browser-round.mjs'
+import { profileUid } from './observations.mjs'
+import { writeObservationFile } from './observation-store.mjs'
+
+const weiboOrigin = /^https:\/\/(?:www\.)?weibo\.com$/
+const fansHeading = /^全部粉丝\s*[（(]\s*([0-9,]+)\s*[）)]$/
+const timeOrder = '关注时间倒序'
+const otherOrder = '粉丝数倒序'
+const ownAvatar = 'div[role=navigation] a[href]:has(img)'
+const scroller = '.vue-recycle-scroller.ready'
+const rowSelector = '.wbpro-scroller-item'
+
+function ownFansUrl(url, owner) {
+  return weiboOrigin.test(url.origin) && url.pathname === `/u/page/follow/${owner}` && url.searchParams.get('relate') === 'fans'
+}
+
+async function siteState(page) {
+  const url = new URL(page.url())
+  if (/^(?:passport\.weibo\.com|login\.sina\.com\.cn)$/.test(url.hostname)) return 'login-required'
+  if (!weiboOrigin.test(url.origin)) return 'page-unverified'
+  const challenge = page.getByText(/^(安全验证|访问异常|访问受限|操作频繁|请输入验证码)$/).filter({ visible: true })
+  if (await challenge.count()) return 'access-blocked'
+  if (await page.getByText(/^(登录|扫码登录|登录微博)$/).filter({ visible: true }).count()) return 'login-required'
+  return 'ok'
+}
+
+export function weiboAdapter(page) {
+  const heading = page.getByRole('heading', { name: fansHeading }).filter({ visible: true })
+  const panel = page.locator('.woo-panel-main').filter({ has: heading }).filter({ visible: true })
+  const avatars = page.locator(ownAvatar).filter({ visible: true })
+  const evidence = { sort: 'unverified', visibilityLimited: null, rowFollowTime: 'unverified', stage: 'identify' }
+  let verifiedOwner
+
+  return {
+    evidence,
+    async identify() {
+      const state = await siteState(page)
+      if (state !== 'ok') return { status: state }
+      await avatars.and(page.locator('a[href*="/u/"]')).first().waitFor({ timeout: 5000 }).catch(() => {})
+      const links = await avatars.evaluateAll(nodes => nodes.map(node => node.href))
+      const candidates = links.filter(href => weiboOrigin.test(new URL(href).origin) && profileUid(href))
+      return candidates.length === 1 ? { status: 'ok', owner: profileUid(candidates[0]) } : { status: 'identity-unverified' }
+    },
+    async openFollowers(owner) {
+      evidence.stage = 'open-own-profile'
+      const avatar = avatars.and(page.locator(`a[href$="/u/${owner}"]`))
+      if (await avatar.count() !== 1) return 'page-unverified'
+      await avatar.click()
+      await page.waitForURL(url => weiboOrigin.test(url.origin) && profileUid(url.href) === owner)
+      evidence.stage = 'open-fans-menu'
+      const menu = page.getByText('我的粉丝', { exact: true }).filter({ visible: true })
+      await menu.waitFor()
+      const destination = await menu.evaluate(node => node.closest('a[href]')?.href ?? null)
+      if (!destination || !ownFansUrl(new URL(destination), owner)) return 'page-unverified'
+      await menu.click()
+      await page.waitForURL(url => ownFansUrl(url, owner))
+      verifiedOwner = owner
+      return siteState(page)
+    },
+    async readWindow() {
+      if (!verifiedOwner || !ownFansUrl(new URL(page.url()), verifiedOwner)) return { status: 'page-unverified' }
+      const orderControl = heading.locator('..').locator('.woo-pop-wrap > :first-child')
+      const time = orderControl.getByText(timeOrder, { exact: true }).filter({ visible: true })
+      const other = orderControl.getByText(otherOrder, { exact: true }).filter({ visible: true })
+      let total
+      try {
+        evidence.stage = 'read-sort-menu'
+        await time.or(other).waitFor()
+        if (await other.count() === 1) {
+          await other.click()
+          const option = page.getByText(timeOrder, { exact: true }).filter({ visible: true })
+          await option.click()
+        }
+        evidence.stage = 'wait-active-sort'
+        await time.waitFor()
+        evidence.stage = 'wait-scroller'
+        await panel.locator(scroller).waitFor()
+        evidence.stage = 'read-total'
+        const text = await heading.innerText()
+        total = Number(text.match(fansHeading)?.[1].replaceAll(',', ''))
+        evidence.stage = 'wait-rows'
+        if (total > 0) await panel.locator(scroller).locator(rowSelector).first().waitFor()
+        // The visibility notice can render after the first row on the real page.
+        await panel.getByText(/部分账号暂不展示/).waitFor({ timeout: 1500 }).catch(() => {})
+      } catch (error) {
+        evidence.issue = error.name === 'TimeoutError' ? 'timeout' : error.message.includes('strict mode violation') ? 'ambiguous-element' : 'dom-error'
+        const state = await siteState(page)
+        return { status: state === 'ok' ? 'load-failed' : state }
+      }
+      evidence.stage = 'read-fan-rows'
+      const snapshot = await panel.evaluate((element, selectors) => {
+        const list = element.querySelector(selectors.scroller)
+        const box = list.getBoundingClientRect()
+        const rows = [...list.querySelectorAll(selectors.rowSelector)].filter(row => {
+          const rect = row.getBoundingClientRect()
+          return rect.height > 0 && rect.bottom > box.top && rect.top < box.bottom
+        }).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+        const links = rows.map(row => {
+          const anchors = row.querySelectorAll('a[href]:has(img)')
+          if (anchors.length !== 1) return ''
+          const url = new URL(anchors[0].href)
+          return url.origin + url.pathname
+        })
+        return {
+          links, rowCount: rows.length,
+          visibilityLimited: element.innerText.includes('部分账号暂不展示'),
+          timeElementPresent: rows.some(row => row.querySelector('time')),
+        }
+      }, { scroller, rowSelector })
+      if (!Number.isSafeInteger(total) || total < 0 || (!snapshot.rowCount && total !== 0)) return { status: 'load-failed' }
+      if (!ownFansUrl(new URL(page.url()), verifiedOwner)) return { status: 'page-unverified' }
+      evidence.sort = 'follow-time-desc'
+      evidence.visibilityLimited = snapshot.visibilityLimited
+      evidence.rowFollowTime = snapshot.timeElementPresent ? 'unverified-time-element' : 'not-observed'
+      evidence.stage = 'rows-read'
+      return { status: 'ok', owner: verifiedOwner, links: snapshot.links, total, next: 'unknown' }
+    },
+  }
+}
+
+export async function readWeiboA(page, root) {
+  const file = join(root, 'weibo-a-observations.json')
+  const state = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { owner: null, rounds: [] }
+  const adapter = weiboAdapter(page)
+  const round = await collectRound(adapter, { expectedOwner: state.owner, maxWindows: 1 })
+  const previous = state.rounds.findLast(item => item.owner && item.pages.length)
+  const attributed = round.owner && round.pages.length > 0
+  const sameSample = attributed && previous ? JSON.stringify(round.pages) === JSON.stringify(previous.pages) : null
+  const entry = {
+    source: 'weibo-visible-dom', slot: 'A', ...round, evidence: adapter.evidence,
+    baseline: Boolean(attributed && !previous), sameSample,
+  }
+  if (attributed) state.owner ??= round.owner
+  state.rounds.push(entry)
+  mkdirSync(root, { recursive: true })
+  writeObservationFile(file, state)
+  return {
+    status: entry.status, endReason: entry.endReason, ownerVerified: Boolean(entry.owner),
+    baseline: entry.baseline, sameSample, coverage: entry.coverage, evidence: entry.evidence,
+  }
+}

@@ -1,0 +1,7 @@
+node_modules/
+.env
+.env.*
+observations.json
+observations.json.*.tmp
+weibo-a-observations.json*
+profiles/

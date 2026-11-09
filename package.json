@@ -1,0 +1,13 @@
+{
+  "name": "weibo-follower-probe",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node probe.mjs",
+    "read:a": "node read-a.mjs",
+    "test": "node --test --test-concurrency=1"
+  },
+  "dependencies": {
+    "playwright-core": "1.65.0"
+  }
+}
