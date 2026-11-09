@@ -20,7 +20,7 @@ const isTestEnv = typeof process !== 'undefined' && Boolean(
 )
 async function openLocal(exe,args) {
   if (isTestEnv && exe === 'explorer.exe') return
-  const child=spawn(exe,args,{stdio:'ignore',detached:true,windowsHide:true})
+  const child=spawn(exe,args,{stdio:'ignore',detached:true})
   await once(child,'spawn');child.unref()
 }
 export async function createMonitorApp({root,port=8766,reader,importProfiles=true,autoTick=true}={}) {
@@ -212,7 +212,14 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
     process.once('SIGINT',()=>app.close());process.once('SIGTERM',()=>app.close())
   }).catch(async e=>{
     if(e.code==='EADDRINUSE'&&process.argv.includes('--open')){
-      try{const res=await fetch(`http://127.0.0.1:${port}/api/state`);if((await res.json()).app==='weibo-follower-monitor'){await openLocal(edgeExecutable(),[`--app=http://127.0.0.1:${port}/`,'--window-size=1280,820']);return}}catch{}
+      try{
+        const res=await fetch(`http://127.0.0.1:${port}/api/state`)
+        const data=await res.json()
+        if(data.app==='weibo-follower-monitor'){
+          await openLocal(edgeExecutable(),[`--app=http://127.0.0.1:${port}/`,'--window-size=1280,820'])
+          return
+        }
+      }catch{}
     }
     console.error('启动失败，请检查端口是否被占用，以及数据目录是否可写。');process.exitCode=1
   })
