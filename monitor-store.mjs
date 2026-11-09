@@ -288,9 +288,14 @@ export class MonitorStore {
 
   update(id, values) {
     this.account(id)
-    const allowed = new Set(['label', 'enabled', 'interval_minutes', 'status', 'message', 'last_attempt', 'last_success', 'next_due', 'failures', 'nickname', 'full_scan_needed', 'blocked_count'])
+    const allowed = new Set(['label', 'owner', 'enabled', 'interval_minutes', 'status', 'message', 'last_attempt', 'last_success', 'next_due', 'failures', 'nickname', 'full_scan_needed', 'blocked_count'])
     const entries = Object.entries(values)
     if (!entries.length || entries.some(([k]) => !allowed.has(k))) throw Error('无效更新。')
+    if (values.owner !== undefined && values.owner !== null) {
+      if (!validUid(values.owner)) throw Error('账号身份数据无效。')
+      const other = this.db.prepare('SELECT id FROM accounts WHERE owner=? AND id<>?').get(values.owner, id)
+      if (other) throw Error('这个微博账号已经绑定，请使用原来的账号记录。')
+    }
     this.db.prepare(`UPDATE accounts SET ${entries.map(([k]) => `${k}=?`).join(',')} WHERE id=?`).run(...entries.map(([, v]) => v), id)
   }
 

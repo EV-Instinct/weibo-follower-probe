@@ -171,6 +171,7 @@ export class MonitorService {
         if (login?.ready) {
           this.store.update(login.id, {
             enabled: 1,
+            ...(login.owner ? { owner: login.owner } : {}),
             ...(login.nickname ? { nickname: login.nickname } : {})
           })
           this.enqueue(login.id)

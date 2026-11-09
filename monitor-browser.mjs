@@ -45,7 +45,7 @@ export class BrowserReader {
     try{
       const adapter=weiboAdapter(this.login.page)
       const identity=await adapter.identify()
-      return {id:this.login.id,ready:identity.status==='ok',nickname:identity.nickname??null}
+      return {id:this.login.id,ready:identity.status==='ok',nickname:identity.nickname??null,owner:identity.owner??null}
     }catch{
       if(this.login?.page?.isClosed()){const id=this.login.id;this.login=null;return {id,closed:true}}
       return null
