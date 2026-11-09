@@ -26,12 +26,14 @@ async function siteState(page) {
   return 'ok'
 }
 
-export function weiboAdapter(page) {
+export function weiboAdapter(page, { full = false } = {}) {
   const heading = page.getByRole('heading', { name: fansHeading }).filter({ visible: true })
   const panel = page.locator('.woo-panel-main').filter({ has: heading }).filter({ visible: true })
   const avatars = page.locator(ownAvatar).filter({ visible: true })
   const evidence = { sort: 'unverified', visibilityLimited: null, rowFollowTime: 'unverified', stage: 'identify' }
   let verifiedOwner
+  let sorted = false
+  let lastScroll = null
 
   return {
     evidence,
@@ -68,7 +70,7 @@ export function weiboAdapter(page) {
       try {
         evidence.stage = 'read-sort-menu'
         await time.or(other).waitFor()
-        if (await other.count() === 1) {
+        if (!sorted && await other.count() === 1) {
           await other.click()
           const option = page.getByText(timeOrder, { exact: true }).filter({ visible: true })
           await option.click()
@@ -83,7 +85,8 @@ export function weiboAdapter(page) {
         evidence.stage = 'wait-rows'
         if (total > 0) await panel.locator(scroller).locator(rowSelector).first().waitFor()
         // The visibility notice can render after the first row on the real page.
-        await panel.getByText(/部分账号暂不展示/).waitFor({ timeout: 1500 }).catch(() => {})
+        if (!sorted) await page.waitForTimeout(350)
+        sorted = true
       } catch (error) {
         evidence.issue = error.name === 'TimeoutError' ? 'timeout' : error.message.includes('strict mode violation') ? 'ambiguous-element' : 'dom-error'
         const state = await siteState(page)
@@ -95,7 +98,7 @@ export function weiboAdapter(page) {
         const box = list.getBoundingClientRect()
         const rows = [...list.querySelectorAll(selectors.rowSelector)].filter(row => {
           const rect = row.getBoundingClientRect()
-          return rect.height > 0 && rect.bottom > box.top && rect.top < box.bottom
+          return rect.height > 0 && rect.bottom > Math.max(0, box.top) && rect.top < Math.min(innerHeight, box.bottom)
         }).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
         const links = rows.map(row => {
           const anchors = row.querySelectorAll('a[href]:has(img)')
@@ -107,6 +110,7 @@ export function weiboAdapter(page) {
           links, rowCount: rows.length,
           visibilityLimited: element.innerText.includes('部分账号暂不展示'),
           timeElementPresent: rows.some(row => row.querySelector('time')),
+          bottom: box.bottom <= innerHeight + 2,
         }
       }, { scroller, rowSelector })
       if (!Number.isSafeInteger(total) || total < 0 || (!snapshot.rowCount && total !== 0)) return { status: 'load-failed' }
@@ -115,7 +119,26 @@ export function weiboAdapter(page) {
       evidence.visibilityLimited = snapshot.visibilityLimited
       evidence.rowFollowTime = snapshot.timeElementPresent ? 'unverified-time-element' : 'not-observed'
       evidence.stage = 'rows-read'
-      return { status: 'ok', owner: verifiedOwner, links: snapshot.links, total, next: 'unknown' }
+      // A viewport at the current DOM bottom can precede an asynchronously appended page.
+      if (full && snapshot.bottom) {
+        await page.waitForTimeout(700)
+        const stillBottom = await panel.locator(scroller).evaluate(el => el.getBoundingClientRect().bottom <= innerHeight + 2)
+        if (!stillBottom) snapshot.bottom = false
+      }
+      return { status: 'ok', owner: verifiedOwner, links: snapshot.links, total, next: full ? (snapshot.bottom ? 'end' : 'more') : 'unknown' }
+    },
+    async advance() {
+      const state = await siteState(page)
+      if (state !== 'ok') return state
+      const position = await panel.locator(scroller).evaluate(el => ({ top: el.getBoundingClientRect().top, height: el.getBoundingClientRect().height }))
+      if (lastScroll && position.top === lastScroll.top && position.height === lastScroll.height) return 'no-progress'
+      lastScroll = position
+      const box = await panel.boundingBox()
+      const viewport = page.viewportSize() ?? { width:1280, height:720 }
+      await page.mouse.move(Math.min(viewport.width-20,Math.max(20,box.x+box.width/2)),Math.min(viewport.height-30,Math.max(80,box.y+100)))
+      await page.mouse.wheel(0, Math.max(200, Math.floor(viewport.height * 0.65)))
+      await page.waitForTimeout(220)
+      return 'ok'
     },
   }
 }
@@ -123,8 +146,8 @@ export function weiboAdapter(page) {
 export async function readWeiboA(page, root) {
   const file = join(root, 'weibo-a-observations.json')
   const state = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { owner: null, rounds: [] }
-  const adapter = weiboAdapter(page)
-  const round = await collectRound(adapter, { expectedOwner: state.owner, maxWindows: 1 })
+  const adapter = weiboAdapter(page, { full: true })
+  const round = await collectRound(adapter, { expectedOwner: state.owner, maxWindows: 600 })
   const previous = state.rounds.findLast(item => item.owner && item.pages.length)
   const attributed = round.owner && round.pages.length > 0
   const sameSample = attributed && previous ? JSON.stringify(round.pages) === JSON.stringify(previous.pages) : null
