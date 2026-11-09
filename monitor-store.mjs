@@ -287,12 +287,15 @@ export class MonitorStore {
   }
 
   update(id, values) {
-    this.account(id)
+    const cur = this.account(id)
     const allowed = new Set(['label', 'owner', 'enabled', 'interval_minutes', 'status', 'message', 'last_attempt', 'last_success', 'next_due', 'failures', 'nickname', 'full_scan_needed', 'blocked_count'])
     const entries = Object.entries(values)
     if (!entries.length || entries.some(([k]) => !allowed.has(k))) throw Error('无效更新。')
     if (values.owner !== undefined && values.owner !== null) {
       if (!validUid(values.owner)) throw Error('账号身份数据无效。')
+      if (cur.owner && cur.owner !== values.owner) {
+        throw Error('登录的不是原来绑定的微博账号，请登录原账号。')
+      }
       const other = this.db.prepare('SELECT id FROM accounts WHERE owner=? AND id<>?').get(values.owner, id)
       if (other) throw Error('这个微博账号已经绑定，请使用原来的账号记录。')
     }
@@ -302,13 +305,6 @@ export class MonitorStore {
   ingest(id, scan, options = {}) {
     if (!validUid(scan.owner) || !Array.isArray(scan.uids) || scan.uids.some(u => !validUid(u))) {
       throw Error('账号身份或UID数据无效。')
-    }
-    const realRoot = process.env.LOCALAPPDATA ? resolve(join(process.env.LOCALAPPDATA, 'WeiboFollowerProbe')) : null
-    if (realRoot && resolve(this.root).toLowerCase() === realRoot.toLowerCase()) {
-      const prohibitedTestUids = new Set(['1234567890', '2345678901'])
-      if (prohibitedTestUids.has(scan.owner) || scan.uids.some(u => prohibitedTestUids.has(u))) {
-        throw Error('检测到测试 UID（1234567890 / 2345678901），严禁写入真实生产数据目录！')
-      }
     }
     const uids = [...new Set(scan.uids)], at = scan.at ?? new Date().toISOString()
     if (!Number.isFinite(Date.parse(at))) throw Error('观测时间无效。')

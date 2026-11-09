@@ -169,12 +169,25 @@ export class MonitorService {
           this.notifyStatusIfNeeded(login.id, 'needs-login')
         }
         if (login?.ready) {
-          this.store.update(login.id, {
-            enabled: 1,
-            ...(login.owner ? { owner: login.owner } : {}),
-            ...(login.nickname ? { nickname: login.nickname } : {})
-          })
-          this.enqueue(login.id)
+          const cur = this.store.account(login.id)
+          if (cur.owner && login.owner && cur.owner !== login.owner) {
+            this.store.update(login.id, {
+              status: 'needs-login',
+              message: '登录的不是原来绑定的微博账号，请登录原账号。',
+              enabled: 0
+            })
+            if (typeof this.reader.cancelLogin === 'function') {
+              await this.reader.cancelLogin()
+            }
+            this.notifyStatusIfNeeded(login.id, 'needs-login')
+          } else {
+            this.store.update(login.id, {
+              enabled: 1,
+              ...(login.owner ? { owner: login.owner } : {}),
+              ...(login.nickname ? { nickname: login.nickname } : {})
+            })
+            this.enqueue(login.id)
+          }
         }
       }
 

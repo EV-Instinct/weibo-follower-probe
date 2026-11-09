@@ -365,3 +365,22 @@ test('用真实结构的旧数据库迁移后，backups 里必须有备份文件
   // 5. 验证 settings 表存在
   assert.equal(store.getSetting('concurrency'), '1')
 })
+
+test('store.update 只允许从空值绑定 owner，不允许改成另一个 UID', t => {
+  const { store, a } = setup(t)
+  // 1. 初始从空值绑定成功
+  assert.equal(store.account(a.id).owner, null)
+  store.update(a.id, { owner: '1111111111' })
+  assert.equal(store.account(a.id).owner, '1111111111')
+
+  // 2. 再次传入相同的 UID 幂等允许
+  store.update(a.id, { owner: '1111111111' })
+  assert.equal(store.account(a.id).owner, '1111111111')
+
+  // 3. 改成另一个 UID 必须拒绝抛错
+  assert.throws(
+    () => store.update(a.id, { owner: '2222222222' }),
+    /登录的不是原来绑定的微博账号，请登录原账号/
+  )
+  assert.equal(store.account(a.id).owner, '1111111111')
+})

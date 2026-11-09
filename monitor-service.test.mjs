@@ -166,3 +166,69 @@ test('Windows 通知限频：同一账号进入需要登录/处理时 1 小时�
   await service.tick()
   assert.ok(service.lastNotified.get(a.id) > firstNoticeTime)
 })
+
+test('A 槽位登录了 B 号：拒绝绑定，把状态设为 needs-login，提示登录原账号，并关闭登录窗口', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'weibo-slot-mismatch-')), store = new MonitorStore(root)
+  t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }) })
+
+  const a = store.addAccount('账号A', 'profileA')
+  store.update(a.id, { owner: '1111111111', status: 'ready' })
+  assert.equal(store.account(a.id).owner, '1111111111')
+
+  let cancelled = false
+  let scanCalls = 0
+  const reader = {
+    login: { id: a.id },
+    async openLogin() {},
+    async loginState() {
+      // 模拟在 A 槽位的登录窗口中，用户登录了 B 号（UID 2222222222）
+      return { id: a.id, ready: true, owner: '2222222222', nickname: '用户B' }
+    },
+    async cancelLogin() {
+      cancelled = true
+      this.login = null
+    },
+    async scan(acc) {
+      scanCalls++
+      return { owner: acc.owner, uids: [], total: 0, complete: true, reason: 'visible-end' }
+    },
+    async close() {}
+  }
+
+  const service = new MonitorService(store, reader, { minDelay: 0, maxDelay: 0 })
+  await service.tick()
+
+  const acc = store.account(a.id)
+  // 1. 拒绝绑定：owner 仍为原账号 1111111111
+  assert.equal(acc.owner, '1111111111')
+  // 2. 状态被设为 needs-login
+  assert.equal(acc.status, 'needs-login')
+  // 3. 明确提示语
+  assert.match(acc.message, /登录的不是原来绑定的微博账号，请登录原账号/)
+  // 4. enabled 保持 0，未入队，未触发 scan
+  assert.equal(acc.enabled, 0)
+  assert.equal(service.queue.has(a.id), false)
+  assert.equal(scanCalls, 0)
+  // 5. 关闭登录窗口
+  assert.equal(cancelled, true)
+
+  // 6. 对比：若之后正确登录原账号 1111111111，则允许通过并自动开始扫描
+  reader.login = { id: a.id }
+  reader.loginState = async () => ({ id: a.id, ready: true, owner: '1111111111', nickname: '用户A' })
+  await service.tick()
+  const accOk = store.account(a.id)
+  assert.equal(accOk.owner, '1111111111')
+  assert.equal(accOk.enabled, 1)
+  assert.equal(scanCalls, 1)
+
+  // 7. 对比：若是空槽位首次绑定，允许绑定任意合法 UID
+  const c = store.addAccount('账号C', 'profileC')
+  assert.equal(store.account(c.id).owner, null)
+  reader.login = { id: c.id }
+  reader.loginState = async () => ({ id: c.id, ready: true, owner: '3333333333', nickname: '用户C' })
+  await service.tick()
+  const accC = store.account(c.id)
+  assert.equal(accC.owner, '3333333333')
+  assert.equal(accC.enabled, 1)
+  assert.equal(scanCalls, 2)
+})
