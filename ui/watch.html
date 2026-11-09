@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="csrf-token" content="{{CSRF}}"><title>微博粉丝助手 · 博主监控</title><link rel="stylesheet" href="/watch.css"><script src="/watch.js" defer></script></head>
+<body>
+<header><div class="brand"><b class="mark">微</b><div><h1>微博粉丝助手 <span>博主监控</span></h1><p>一个查看账号 · 输入博主 UID · 每满 60 条自动出文件</p></div></div><nav><button id="settings">设置</button><button id="help">使用说明</button><button id="exit" class="danger">退出程序</button></nav></header>
+<main>
+<section class="viewer"><div><span class="eyebrow">我的查看账号</span><h2 id="viewerTitle">正在连接…</h2><p id="viewerMessage">正在读取登录状态</p></div><div class="viewer-actions"><button id="login" class="primary">登录查看账号</button><button id="cancelLogin" hidden>取消登录</button></div></section>
+<div id="error" class="error" role="alert" hidden></div><div id="toast" role="status" hidden></div>
+<section class="metrics"><div><span>监控目标</span><strong id="targetCount">0</strong><small>通过 UID 添加</small></div><div><span>今日新增记录</span><strong id="todayCount">0</strong><small>包含观察到的重新关注</small></div><div><span>待导出记录</span><strong id="pendingCount">0</strong><small>每个目标分别累计</small></div><div><span>已生成文件</span><strong id="batchCount">0</strong><small>每满 60 条自动导出</small></div></section>
+<section class="workspace"><div class="section-title"><div><h2>监控列表</h2><p>首次读取建立底册，之后记录顶部出现的新关注。</p></div><button id="folder">打开导出文件夹</button></div>
+<form id="addForm"><label>博主 UID<input id="uid" name="uid" placeholder="例如 1856404484" inputmode="numeric" maxlength="20" pattern="[1-9][0-9]{4,19}" required></label><label>备注（可选）<input id="label" name="label" placeholder="例如 凤凰网科技" maxlength="80"></label><button class="primary" type="submit">添加监控</button></form>
+<div id="targets"></div><div id="empty" hidden><h3>添加第一个监控博主</h3><p>在上方输入对方的 UID，无需登录对方账号。</p></div>
+<footer>比较列表顶部顺序，不要求读取全部历史粉丝。列表无法衔接时会提示处理，不会把整批粉丝直接记为新增。</footer></section>
+</main>
+<dialog id="settingsDialog"><form id="settingsForm"><h2>导出设置</h2><label>导出文件夹<input id="exportDir" required></label><p>新文件保存到此处；已生成文件保留原位置。</p><div class="actions"><button type="button" data-close>取消</button><button class="primary" type="submit">保存设置</button></div></form></dialog>
+<dialog id="targetDialog"><form id="targetForm"><h2>目标设置</h2><label>备注<input id="targetLabel" required maxlength="80"></label><label>检查间隔（分钟）<input id="targetInterval" type="number" min="1" max="1440" required></label><p>多个目标共用一个登录账号，按顺序检查。</p><div class="actions"><button type="button" data-close>取消</button><button type="submit" class="primary">保存目标设置</button></div></form></dialog>
+<dialog id="detailDialog" class="wide"><div class="section-title"><h2 id="detailTitle">记录与文件</h2><button data-close>关闭详情</button></div><div id="detailContent"></div></dialog>
+<dialog id="helpDialog" class="wide"><h2>使用说明</h2><ol><li>登录一个自己的微博查看账号。</li><li>输入其他博主的 UID 添加监控，首次读取仅建立顶部底册。</li><li>默认每 2 分钟检查，目标依次读取；可在目标设置中调整。</li><li>新 UID 或旧 UID 再次进入列表顶部，按新关注记录累计；同一轮不重复记录。</li><li>每个目标满 60 条自动生成 TXT，一行一个 UID；“导出尾数”可手动导出不足 60 条的记录。</li></ol><p>两次检查之间发生、且列表顺序未留下变化的取关再关注无法识别。页面过滤或排序变化也可能影响判断；无法可靠衔接时显示“需要核对”。</p><p>关闭窗口后后台继续运行。彻底停止请点击“退出程序”。旧版数据库、登录档案和导出文件保留；旧账号不会自动当作监控目标。</p><div class="actions"><button data-close>知道了</button></div></dialog>
+</body></html>

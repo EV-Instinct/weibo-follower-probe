@@ -1,0 +1,31 @@
+const $=s=>document.querySelector(s),csrf=$('meta[name="csrf-token"]').content
+let state=null,editing=null,toastTimer,refreshing=false
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+const time=x=>x?new Date(x).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}):'尚未读取'
+const labels={waiting:'等待底册',ready:'监控中',reading:'正在读取',gap:'需要核对',error:'读取异常',blocked:'访问受限','needs-login':'等待登录'}
+function toast(msg){$('#toast').textContent=msg;$('#toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').hidden=true,4500)}
+async function api(path,body){const r=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(data.error||'操作失败');return data}
+async function action(fn){try{await fn();await refresh()}catch(e){toast(e.message)}}
+async function refresh(){if(refreshing)return;refreshing=true;try{state=await api('/api/state');render();$('#error').textContent=state.exportError;$('#error').hidden=!state.exportError}catch(e){$('#error').textContent='后台连接失败，请重新打开软件。';$('#error').hidden=false}finally{refreshing=false}}
+function render(){const v=state.viewer;$('#viewerTitle').textContent=v.owner?`查看账号 UID ${v.owner}`:'尚未登录微博';$('#viewerMessage').textContent=v.message||(v.status==='ready'?'已登录，可以监控博主。':'请先登录查看账号。');$('#login').textContent=v.status==='ready'?'重新登录':'登录查看账号';$('#login').disabled=!!state.activeId||state.loginOpen;$('#cancelLogin').hidden=!state.loginOpen
+  $('#targetCount').textContent=state.targets.length;$('#todayCount').textContent=state.targets.reduce((n,t)=>n+t.today_new,0);$('#pendingCount').textContent=state.targets.reduce((n,t)=>n+t.pending,0);$('#batchCount').textContent=state.batchCount;$('#empty').hidden=state.targets.length>0
+  $('#targets').innerHTML=state.targets.map(t=>{const busy=state.activeId===t.id;const badge=!t.enabled&&!busy?'已暂停':labels[t.status]||t.status;const wait=t.next_due>Date.now()?`${Math.ceil((t.next_due-Date.now())/60000)} 分钟后检查`:'等待依次检查';return `<article class="target" data-id="${esc(t.id)}"><div class="identity"><h3>${esc(t.label)}</h3><small>UID ${esc(t.uid)}</small></div><div><span class="tag ${['gap','blocked'].includes(t.status)?'warn':t.status==='error'?'error':''}">${esc(badge)}</span><p>${esc(t.message)}</p><small>${t.enabled?esc(wait):'自动检查已暂停'}</small></div><div><div class="metric-label">粉丝总数</div><b>${t.total===null?'—':esc(t.total.toLocaleString())}</b><small>顶部读取 ${t.read_count} 人</small></div><div><div class="metric-label">待导出</div><b class="number">${t.pending}</b><small>满 60 条出文件</small></div><div><div class="metric-label">最近成功读取</div><b>${esc(time(t.last_success))}</b><small>今日新增 ${t.today_new} 条</small></div><div class="buttons"><button data-action="check" ${busy||v.status!=='ready'?'disabled':''}>立即检查</button><button data-action="${t.enabled?'pause':'start'}">${t.enabled?'暂停':'开始'}</button><button data-action="detail">记录与文件</button><button data-action="tail" ${t.pending?'':'disabled'}>导出尾数</button><button data-action="settings">目标设置</button>${t.status==='gap'?'<button data-action="rebaseline">重新建立底册</button>':''}<button data-action="delete" class="danger" ${busy?'disabled':''}>移除</button></div></article>`}).join('')
+}
+$('#addForm').addEventListener('submit',e=>{e.preventDefault();action(async()=>{await api('/api/targets',{uid:$('#uid').value.trim(),label:$('#label').value.trim()});$('#addForm').reset();toast('监控目标已添加，首次读取不计新增。')})})
+$('#login').onclick=()=>action(()=>api('/api/login',{}));$('#cancelLogin').onclick=()=>action(()=>api('/api/cancel-login',{}));$('#folder').onclick=()=>action(()=>api('/api/folder',{}))
+$('#settings').onclick=()=>{if(!state)return;$('#exportDir').value=state.exportRoot;$('#settingsDialog').showModal()};$('#help').onclick=()=>$('#helpDialog').showModal()
+$('#settingsForm').onsubmit=e=>{e.preventDefault();action(async()=>{await api('/api/settings',{export_dir:$('#exportDir').value});$('#settingsDialog').close();toast('设置已保存。')})}
+$('#targetForm').onsubmit=e=>{e.preventDefault();action(async()=>{await api(`/api/targets/${editing}/settings`,{label:$('#targetLabel').value,interval_minutes:Number($('#targetInterval').value)});$('#targetDialog').close();toast('目标设置已保存。')})}
+document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close())
+$('#exit').onclick=()=>{if(confirm('退出后将停止所有监控，记录会保留。确定退出？'))action(async()=>{await api('/api/stop',{});toast('程序正在退出。')})}
+$('#targets').onclick=e=>{const button=e.target.closest('[data-action]');if(!button)return;const id=button.closest('[data-id]').dataset.id,verb=button.dataset.action,t=state.targets.find(t=>t.id===id)
+  action(async()=>{
+    if(verb==='settings'){editing=id;$('#targetLabel').value=t.label;$('#targetInterval').value=t.interval_minutes;$('#targetDialog').showModal();return}
+    if(verb==='detail'){const d=await api('/api/targets/'+id);$('#detailTitle').textContent=t.label+' · 记录与文件';$('#detailContent').innerHTML=`<h3>导出文件</h3>${d.batches.map(b=>`<div class="file">${esc(b.path)}<br><small>${esc(time(b.at))} · ${b.count} 条 · ${b.status==='ready'?'已生成':'待写入'}</small><br><a href="/api/batches/${b.id}/download">下载 UID 文件</a></div>`).join('')||'<p>尚未生成文件，满 60 条自动导出。</p>'}<h3>最近关注记录</h3><table><thead><tr><th>UID</th><th>发现时间</th><th>导出状态</th></tr></thead><tbody>${d.events.map(x=>`<tr><td>${esc(x.uid)}</td><td>${esc(time(x.at))}</td><td>${x.batch_id?'已分配批次':'待导出'}</td></tr>`).join('')||'<tr><td colspan="3">暂无新增记录</td></tr>'}</tbody></table><h3>最近读取</h3>${d.scans.slice(0,5).map(s=>`<p>${esc(time(s.at))} · 读取 ${s.count} 人 · 新增 ${s.added} 条<br>${esc(s.message)}</p>`).join('')}`;$('#detailDialog').showModal();return}
+    if(verb==='tail'&&!confirm(`把“${t.label}”当前 ${t.pending} 条记录立即导出？`))return
+    if(verb==='delete'&&!confirm(`移除“${t.label}”及它的本地底册和记录？已经生成的文件会保留。`))return
+    if(verb==='rebaseline'&&!confirm('重新把当前可见顶部作为底册？无法衔接期间的关注不再追溯，已有新增记录保留。'))return
+    await api(`/api/targets/${id}/${verb}`,{});toast(verb==='tail'?'导出完成。':verb==='check'?'已加入检查队列。':'操作已完成。')
+  })
+}
+refresh();setInterval(refresh,3000)
