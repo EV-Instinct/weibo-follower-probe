@@ -80,3 +80,44 @@ test('页面报告拦截时停止，观测到的链接也不挂在会话上', as
   assert.equal(round.owner, null)
   assert.deepEqual(round.pages, [])
 })
+
+test('增量读取遇到连续 2 屏已知就停止，候选 UID 不算已知', async () => {
+  const k1 = '3000000001', k2 = '3000000002', k3 = '3000000003'
+  const new1 = '4000000001', candidate1 = '5000000001'
+  const knownSet = new Set([k1, k2, k3])
+  const isKnown = uid => knownSet.has(uid)
+
+  // 1. 连续 2 屏全已知：第0屏有新UID和已知，第1屏全已知，第2屏全已知 -> 停止在第2屏
+  const round = await collectRound(fixture([
+    { status: 'ok', owner, links: [href(new1), href(k1)], total: 10, next: 'more' },
+    { status: 'ok', owner, links: [href(k1), href(k2)], total: 10, next: 'more' },
+    { status: 'ok', owner, links: [href(k2), href(k3)], total: 10, next: 'more' },
+    { status: 'ok', owner, links: [href(k3)], total: 10, next: 'more' },
+  ]), { maxWindows: 40, isKnown, mode: 'incremental' })
+
+  assert.equal(round.endReason, 'incremental-hit')
+  assert.equal(round.coverage.windows, 3) // Stopped after 3rd window (streak of 2: window 1 and 2)
+  assert.equal(round.status, 'observed')
+
+  // 2. 候选 UID 出现时，knownStreak 重置为 0，不停止
+  const roundWithCand = await collectRound(fixture([
+    { status: 'ok', owner, links: [href(k1), href(k2)], total: 10, next: 'more' },
+    { status: 'ok', owner, links: [href(candidate1)], total: 10, next: 'more' }, // not known!
+    { status: 'ok', owner, links: [href(k2)], total: 10, next: 'more' }, // streak = 1
+    { status: 'ok', owner, links: [href(candidate1)], total: 10, next: 'end' }, // streak reset to 0, reaches end
+  ]), { maxWindows: 40, isKnown, mode: 'incremental' })
+
+  assert.equal(roundWithCand.endReason, 'visible-end')
+  assert.equal(roundWithCand.coverage.windows, 4)
+})
+
+test('增量读取读满 40 屏还没遇到已知粉丝，停止并标记 window-budget', async () => {
+  const isKnown = () => false
+  const windows = Array.from({ length: 45 }, (_, i) => ({
+    status: 'ok', owner, links: [href(`90000000${String(i).padStart(2, '0')}`)], total: 100, next: 'more'
+  }))
+  const round = await collectRound(fixture(windows), { maxWindows: 40, isKnown, mode: 'incremental' })
+  assert.equal(round.endReason, 'window-budget')
+  assert.equal(round.coverage.windows, 40)
+  assert.equal(round.status, 'partial')
+})

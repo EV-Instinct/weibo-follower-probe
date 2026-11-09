@@ -6,7 +6,7 @@ const stop = (reason, fallback) => browserStops.has(reason) ? reason : fallback
 
 // A site adapter must independently verify the signed-in user and the owner of
 // each visible fans region. It may return links only from rows in that region.
-export async function collectRound(browser, { expectedOwner = null, maxWindows = 5 } = {}) {
+export async function collectRound(browser, { expectedOwner = null, maxWindows = 5, isKnown = null, mode = 'incremental' } = {}) {
   if (!Number.isSafeInteger(maxWindows) || maxWindows < 1 || (expectedOwner !== null && !validUid(expectedOwner))) {
     throw new Error('无效的观测范围或绑定 UID。')
   }
@@ -15,6 +15,7 @@ export async function collectRound(browser, { expectedOwner = null, maxWindows =
   const totals = new Set()
   let unresolvedLinks = 0
   let owner = null
+  let knownStreak = 0
 
   function result(endReason, attributed) {
     const savedPages = attributed ? pages : []
@@ -25,9 +26,11 @@ export async function collectRound(browser, { expectedOwner = null, maxWindows =
     if (total !== null) {
       totalRelation = counts.unique === total ? 'equal' : counts.unique < total ? 'below' : 'above'
     }
+    const isObserved = (endReason === 'visible-end' || endReason === 'incremental-hit') && unresolvedLinks === 0
     return {
       startedAt, endedAt: new Date().toISOString(), owner: attributed ? owner : null,
-      status: !attributed ? 'unattributed' : endReason === 'visible-end' && unresolvedLinks === 0 ? 'observed' : 'partial',
+      nickname: browser.nickname ?? null,
+      status: !attributed ? 'unattributed' : isObserved ? 'observed' : 'partial',
       endReason, pages: savedPages,
       coverage: {
         windows: savedPages.length, maxWindows, ...counts,
@@ -71,6 +74,19 @@ export async function collectRound(browser, { expectedOwner = null, maxWindows =
         unresolvedLinks += window.links.length - uids.length
         if (Number.isSafeInteger(window.total) && window.total >= 0) totals.add(window.total)
         pages.push(uids)
+
+        if (mode === 'incremental' && typeof isKnown === 'function') {
+          if (uids.length > 0 && uids.every(u => isKnown(u))) {
+            knownStreak++
+            if (knownStreak >= 2) {
+              endReason = 'incremental-hit'
+              break
+            }
+          } else if (uids.length > 0) {
+            knownStreak = 0
+          }
+        }
+
         if (window.next !== 'more') {
           endReason = window.next === 'end' ? 'visible-end' : 'no-proven-continuation'
           break

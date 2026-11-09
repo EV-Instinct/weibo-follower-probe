@@ -42,23 +42,33 @@ export class BrowserReader {
     if(!this.login)return null
     if(this.login.page.isClosed()){const id=this.login.id;this.login=null;return {id,closed:true}}
     if(Date.now()-this.login.openedAt>15*60*1000){const id=this.login.id;await this.cancelLogin();return {id,closed:true}}
-    const identity=await weiboAdapter(this.login.page).identify()
-    return {id:this.login.id,ready:identity.status==='ok'}
+    const adapter=weiboAdapter(this.login.page)
+    const identity=await adapter.identify()
+    return {id:this.login.id,ready:identity.status==='ok',nickname:identity.nickname??null}
   }
   async cancelLogin(){const session=this.login;this.login=null;await session?.context.close()}
-  async scan(account) {
+  async scan(account,{mode=null,isKnown=null}={}) {
     let session
     if(this.login?.id===account.id){session=this.login;this.login=null}
     else session=await this.launch(account,true)
-    const timeout=setTimeout(()=>session.context.close().catch(()=>{}),180000)
+    const scanMode=mode??(!account.baseline_at?'baseline':account.full_scan_needed?'full':'incremental')
+    const isFull=scanMode==='baseline'||scanMode==='full'
+    const maxWindows=isFull?1500:40
+    const timeoutMs=isFull?15*60*1000:5*60*1000
+    const timeout=setTimeout(()=>session.context.close().catch(()=>{}),timeoutMs)
     try{
       await this.home(session.page)
-      const adapter=weiboAdapter(session.page,{full:true})
-      const round=await collectRound(adapter,{expectedOwner:account.owner,maxWindows:600})
+      const adapter=weiboAdapter(session.page,{full:isFull})
+      const round=await collectRound(adapter,{expectedOwner:account.owner,maxWindows,isKnown,mode:scanMode})
       if(!round.owner){const messages={'login-required':'登录已失效，请点击登录账号。','identity-mismatch':'登录账号与已绑定账号不一致，请登录原账号。','access-blocked':'出现验证码或访问限制，请点击登录账号处理。'};throw Error(messages[round.endReason]??'无法核实登录身份，请点击登录账号检查。')}
       const uids=[...new Set(round.pages.flat())], total=round.coverage.exactTotals.length===1?round.coverage.exactTotals[0]:null
-      const complete=round.endReason==='visible-end'&&round.coverage.unresolvedLinks===0&&total===uids.length
-      return {owner:round.owner,uids,total,complete,at:round.endedAt,reason:round.endReason,
+      const complete=round.coverage.unresolvedLinks===0 && (
+        scanMode==='incremental'
+          ? (round.endReason==='incremental-hit'||round.endReason==='visible-end')
+          : (round.endReason==='visible-end')
+      )
+      return {owner:round.owner,nickname:adapter.nickname??round.nickname??null,uids,total,complete,mode:scanMode,
+        at:round.endedAt,reason:round.endReason,unresolvedLinks:round.coverage.unresolvedLinks,
         windows:round.coverage.windows,visibilityLimited:adapter.evidence.visibilityLimited}
     } finally {clearTimeout(timeout);await session.context.close()}
   }

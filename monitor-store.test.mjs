@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MonitorStore } from './monitor-store.mjs'
@@ -83,4 +84,186 @@ test('导出目录不可用时不丢批次，恢复后生成唯一文件',t=>{
   assert.equal(env.store.account(a.id).waiting_files,0)
   assert.equal(env.store.batches(a.id).length,1)
   assert.equal(env.store.batches(a.id)[0].status,'ready')
+})
+
+test('大账号基线不要求数量相等', t => {
+  const env = setup(t), { a } = env
+  // 页面标题粉丝数 100000，但可见滚动到末尾读到 50 个
+  const bigScan = {
+    owner: '1234567890',
+    uids: ids(50),
+    total: 100000,
+    complete: true,
+    reason: 'visible-end',
+    unresolvedLinks: 0,
+    at: '2026-11-09T02:00:00.000Z',
+  }
+  const result = env.store.ingest(a.id, bigScan, { mode: 'baseline' })
+  assert.equal(result.baseline, true)
+  assert.equal(result.complete, true)
+  assert.equal(result.added, 0)
+  const acc = env.store.account(a.id)
+  assert.ok(acc.baseline_at)
+  assert.equal(acc.displayed_total, 100000)
+  assert.equal(acc.read_count, 50)
+  assert.equal(acc.historical, 50)
+  assert.equal(acc.pending, 0)
+  assert.equal(acc.candidates, 0)
+})
+
+test('读满 40 屏转为候选并在下一轮完整读取，候选后来转为新增', t => {
+  const env = setup(t), { a } = env
+  // 1. 建立基线
+  env.store.ingest(a.id, scan(ids(10)), { mode: 'baseline' })
+  assert.ok(env.store.account(a.id).baseline_at)
+
+  // 2. 增量读满 40 屏未遇已知，原因 window-budget
+  const budgetScan = {
+    owner: '1234567890',
+    uids: ['2000000001', '2000000002'],
+    total: 12,
+    complete: false,
+    reason: 'window-budget',
+    unresolvedLinks: 0,
+    at: '2026-11-09T03:00:00.000Z',
+  }
+  const resBudget = env.store.ingest(a.id, budgetScan, { mode: 'incremental' })
+  assert.equal(resBudget.complete, false)
+  assert.equal(resBudget.added, 0)
+  const accBudget = env.store.account(a.id)
+  assert.equal(accBudget.full_scan_needed, 1)
+  assert.equal(accBudget.candidates, 2)
+  assert.equal(accBudget.pending, 0)
+  // 候选 UID 不算已知
+  assert.equal(env.store.isKnown(a.id, '2000000001'), false)
+  assert.equal(env.store.isKnown(a.id, '2000000002'), false)
+
+  // 3. 下一轮改为完整读取 (mode: 'full')，成功到达末尾
+  const fullScan = {
+    owner: '1234567890',
+    uids: [...ids(10), '2000000001', '2000000002', '2000000003'],
+    total: 13,
+    complete: true,
+    reason: 'visible-end',
+    unresolvedLinks: 0,
+    at: '2026-11-09T03:10:00.000Z',
+  }
+  const resFull = env.store.ingest(a.id, fullScan, { mode: 'full' })
+  assert.equal(resFull.complete, true)
+  assert.equal(resFull.added, 3) // 2 候选转为新增 + 1 全新
+  const accFull = env.store.account(a.id)
+  assert.equal(accFull.full_scan_needed, 0)
+  assert.equal(accFull.candidates, 0)
+  assert.equal(accFull.pending, 3)
+  // 转为新增后算作已知
+  assert.equal(env.store.isKnown(a.id, '2000000001'), true)
+  assert.equal(env.store.isKnown(a.id, '2000000003'), true)
+})
+
+test('文件名格式、非法字符处理、同名加 _2', t => {
+  const { store, a, root } = setup(t)
+  // 设置含有非法 Windows 字符和超长字符的备注
+  store.update(a.id, { label: '主账号/工作:测试*<>?|"非常长非常长非常长非常长非常长超过三十个字会被截断' })
+  // 建立基线并添加 60 个新粉丝
+  store.ingest(a.id, scan([]), { mode: 'baseline' })
+  store.ingest(a.id, scan(ids(60)), { mode: 'incremental' })
+
+  // 第一次导出
+  const made1 = store.flush()
+  assert.equal(made1.length, 1)
+  const batch1 = store.batches(a.id)[0]
+  // 目录为 <账号名>_<UID>，不再有年份子目录
+  assert.match(batch1.relative_path, /^[^\\/]+_[^\\/]+\\[^\\/]+$/)
+  assert.equal(batch1.relative_path.includes(':'), false)
+  assert.equal(batch1.relative_path.includes('*'), false)
+  assert.equal(batch1.relative_path.includes('?'), false)
+  assert.equal(batch1.relative_path.includes('"'), false)
+  assert.equal(batch1.relative_path.includes('<'), false)
+  assert.equal(batch1.relative_path.includes('>'), false)
+  assert.equal(batch1.relative_path.includes('|'), false)
+  // 文件名符合：月.日 时.分 60个 账号名.txt
+  assert.match(batch1.relative_path, /\d+\.\d+ \d+\.\d{2} 60个 .+\.txt$/)
+
+  // 第二次添加 60 个，同时间生成批次 -> 同名冲突依次加 _2
+  store.ingest(a.id, scan(ids(60, 2000000000)), { mode: 'incremental' })
+  const made2 = store.flush()
+  assert.equal(made2.length, 1)
+  const batch2 = store.batches(a.id)[0]
+  assert.match(batch2.relative_path, /_2\.txt$/)
+
+  // 第三次添加 60 个 -> 同名冲突加 _3
+  store.ingest(a.id, scan(ids(60, 3000000000)), { mode: 'incremental' })
+  const made3 = store.flush()
+  assert.equal(made3.length, 1)
+  const batch3 = store.batches(a.id)[0]
+  assert.match(batch3.relative_path, /_3\.txt$/)
+})
+
+test('对旧数据库的兼容迁移：备份到 backups/，字段补全，间隔5改10，旧数据不丢且不重复导出', t => {
+  const root = mkdtempSync(join(tmpdir(), 'weibo-legacy-'))
+
+  // 1. 手动构建旧版本 SQLite 数据库结构（无 nickname, full_scan_needed, blocked_count；interval_minutes 默认为 5）
+  const legacyDb = new DatabaseSync(join(root, 'monitor.sqlite'))
+  legacyDb.exec(`
+    CREATE TABLE accounts(
+      id TEXT PRIMARY KEY, label TEXT NOT NULL, profile TEXT UNIQUE NOT NULL, owner TEXT UNIQUE,
+      baseline_at TEXT, enabled INTEGER NOT NULL DEFAULT 0, interval_minutes INTEGER NOT NULL DEFAULT 5,
+      status TEXT NOT NULL DEFAULT 'ready', message TEXT NOT NULL DEFAULT '',
+      last_attempt TEXT, last_success TEXT, next_due INTEGER NOT NULL DEFAULT 0,
+      displayed_total INTEGER, read_count INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE batches(id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id),
+      created_at TEXT NOT NULL, count INTEGER NOT NULL, relative_path TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'reserved');
+    CREATE TABLE followers(account_id TEXT NOT NULL REFERENCES accounts(id), uid TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('historical','candidate','new')), first_seen TEXT NOT NULL,
+      confirmed_at TEXT, batch_id INTEGER REFERENCES batches(id), PRIMARY KEY(account_id,uid));
+    CREATE INDEX pending ON followers(account_id,kind,batch_id);
+    CREATE TABLE scans(id INTEGER PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id), at TEXT NOT NULL,
+      complete INTEGER NOT NULL, total INTEGER, read_count INTEGER NOT NULL, reason TEXT NOT NULL);
+  `)
+  const accId = 'legacy-acc-1'
+  legacyDb.prepare(`INSERT INTO accounts(id, label, profile, owner, baseline_at, enabled, interval_minutes, status)
+    VALUES(?, '旧账号A', 'A', '1234567890', '2026-11-08T10:00:00.000Z', 1, 5, 'ready')`).run(accId)
+  // 插入历史粉丝
+  legacyDb.prepare("INSERT INTO followers(account_id, uid, kind, first_seen) VALUES(?, '1000000001', 'historical', '2026-11-08T10:00:00.000Z')").run(accId)
+  // 插入已经导出过的批次和粉丝
+  legacyDb.prepare("INSERT INTO batches(id, account_id, created_at, count, relative_path, status) VALUES(1, ?, '2026-11-08T11:00:00.000Z', 1, 'A_1234567890/2026/11.08 11.00.00 1个_0001.txt', 'ready')").run(accId)
+  legacyDb.prepare("INSERT INTO followers(account_id, uid, kind, first_seen, confirmed_at, batch_id) VALUES(?, '1000000002', 'new', '2026-11-08T11:00:00.000Z', '2026-11-08T11:00:00.000Z', 1)").run(accId)
+  // 插入待导出新粉丝
+  legacyDb.prepare("INSERT INTO followers(account_id, uid, kind, first_seen, confirmed_at, batch_id) VALUES(?, '1000000003', 'new', '2026-11-08T12:00:00.000Z', '2026-11-08T12:00:00.000Z', NULL)").run(accId)
+  legacyDb.close()
+
+  // 2. 用 MonitorStore 打开旧数据库，触发自动备份与兼容迁移
+  const store = new MonitorStore(root)
+  t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }) })
+
+  // 验证备份文件已创建在 backups/
+  const backupDir = join(root, 'backups')
+  assert.ok(existsSync(backupDir))
+  const backupFiles = readdirSync(backupDir).filter(f => f.startsWith('monitor.before-migration-'))
+  assert.equal(backupFiles.length >= 1, true)
+
+  // 验证账号字段已迁移：interval_minutes 5 改为 10
+  const acc = store.account(accId)
+  assert.equal(acc.interval_minutes, 10)
+  assert.equal(acc.nickname, null)
+  assert.equal(acc.full_scan_needed, 0)
+  assert.equal(acc.blocked_count, 0)
+  assert.equal(acc.historical, 1)
+  assert.equal(acc.total_new, 2)
+  assert.equal(acc.pending, 1) // 只有 1000000003 待导出
+  assert.equal(acc.exported_batches, 1)
+
+  // 验证全局设置默认 concurrency 存在
+  assert.equal(store.getSetting('concurrency'), '1')
+
+  // 验证旧批次不会被重新导出，只导出新增的尾数
+  const made = store.flush({ accountId: accId, tail: true })
+  assert.equal(made.length, 1)
+  const newBatch = store.batches(accId).find(b => b.id === made[0])
+  assert.equal(newBatch.count, 1)
+  // 读取新导出的文件内容，只包含 1000000003
+  const newBatchPath = join(root, 'exports', newBatch.relative_path)
+  assert.equal(readFileSync(newBatchPath, 'utf8').trim(), '1000000003')
+  // 待导出变为 0
+  assert.equal(store.account(accId).pending, 0)
 })

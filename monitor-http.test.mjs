@@ -38,4 +38,21 @@ test('管理界面添加账号、检查、批次下载及跨站请求防护', {t
   assert.equal(denied.status,403)
   assert.equal(app.store.accounts().length,1)
   assert.deepEqual(errors,[])
+
+  // 验证并发设置 API 与 /api/state 返回字段
+  const csrf = await page.locator('meta[name="csrf-token"]').getAttribute('content')
+  const stateRes = await (await fetch(app.address + 'api/state')).json()
+  assert.equal(stateRes.concurrency, 1)
+  assert.ok('next_due' in stateRes.accounts[0])
+  assert.ok('nickname' in stateRes.accounts[0])
+
+  const setRes = await fetch(app.address + 'api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: new URL(app.address).origin, 'X-CSRF-Token': csrf },
+    body: JSON.stringify({ concurrency: 2 })
+  })
+  assert.equal(setRes.status, 200)
+  assert.equal(app.store.getSetting('concurrency'), '2')
+  const updatedState = await (await fetch(app.address + 'api/state')).json()
+  assert.equal(updatedState.concurrency, 2)
 })

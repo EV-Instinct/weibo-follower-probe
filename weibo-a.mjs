@@ -30,27 +30,58 @@ export function weiboAdapter(page, { full = false } = {}) {
   const heading = page.getByRole('heading', { name: fansHeading }).filter({ visible: true })
   const panel = page.locator('.woo-panel-main').filter({ has: heading }).filter({ visible: true })
   const avatars = page.locator(ownAvatar).filter({ visible: true })
-  const evidence = { sort: 'unverified', visibilityLimited: null, rowFollowTime: 'unverified', stage: 'identify' }
+  const evidence = { sort: 'unverified', visibilityLimited: null, rowFollowTime: 'unverified', stage: 'identify', nickname: null }
   let verifiedOwner
   let sorted = false
   let lastScroll = null
+  let detectedNickname = null
+
+  async function tryExtractNickname(owner) {
+    if (detectedNickname) return detectedNickname
+    try {
+      const name = await page.evaluate((uid) => {
+        const navImg = document.querySelector(`div[role=navigation] a[href*="${uid}"] img`)
+        if (navImg?.alt && navImg.alt !== '我' && navImg.alt !== '头像') return navImg.alt.trim()
+        if (navImg?.title) return navImg.title.trim()
+        const navAnchor = document.querySelector(`div[role=navigation] a[href*="${uid}"]`)
+        const navText = navAnchor?.innerText?.trim()
+        if (navText && navText !== '我' && navText.length <= 30) return navText
+        const titleMatch = document.title.match(/^(.+?)\s*(?:的个人主页|的微博|的关注和粉丝|全部粉丝)/)
+        if (titleMatch && titleMatch[1] && !titleMatch[1].includes('微博')) return titleMatch[1].trim()
+        const headerName = document.querySelector('[class*="ProfileHeader_name"], .username, .name')
+        if (headerName?.innerText?.trim()) return headerName.innerText.trim()
+        return null
+      }, owner)
+      if (name) {
+        detectedNickname = name
+        evidence.nickname = name
+      }
+    } catch {}
+    return detectedNickname
+  }
 
   return {
     evidence,
+    get nickname() { return detectedNickname },
     async identify() {
       const state = await siteState(page)
       if (state !== 'ok') return { status: state }
       await avatars.and(page.locator('a[href*="/u/"]')).first().waitFor({ timeout: 5000 }).catch(() => {})
       const links = await avatars.evaluateAll(nodes => nodes.map(node => node.href))
       const candidates = links.filter(href => weiboOrigin.test(new URL(href).origin) && profileUid(href))
-      return candidates.length === 1 ? { status: 'ok', owner: profileUid(candidates[0]) } : { status: 'identity-unverified' }
+      if (candidates.length !== 1) return { status: 'identity-unverified' }
+      const owner = profileUid(candidates[0])
+      await tryExtractNickname(owner)
+      return { status: 'ok', owner, nickname: detectedNickname }
     },
     async openFollowers(owner) {
       evidence.stage = 'open-own-profile'
+      await tryExtractNickname(owner)
       const avatar = avatars.and(page.locator(`a[href$="/u/${owner}"]`))
       if (await avatar.count() !== 1) return 'page-unverified'
       await avatar.click()
       await page.waitForURL(url => weiboOrigin.test(url.origin) && profileUid(url.href) === owner)
+      await tryExtractNickname(owner)
       evidence.stage = 'open-fans-menu'
       const menu = page.getByText('我的粉丝', { exact: true }).filter({ visible: true })
       await menu.waitFor()
@@ -59,10 +90,12 @@ export function weiboAdapter(page, { full = false } = {}) {
       await menu.click()
       await page.waitForURL(url => ownFansUrl(url, owner))
       verifiedOwner = owner
+      await tryExtractNickname(owner)
       return siteState(page)
     },
     async readWindow() {
       if (!verifiedOwner || !ownFansUrl(new URL(page.url()), verifiedOwner)) return { status: 'page-unverified' }
+      await tryExtractNickname(verifiedOwner)
       const orderControl = heading.locator('..').locator('.woo-pop-wrap > :first-child')
       const time = orderControl.getByText(timeOrder, { exact: true }).filter({ visible: true })
       const other = orderControl.getByText(otherOrder, { exact: true }).filter({ visible: true })

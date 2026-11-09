@@ -31,7 +31,7 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
         const files={'/':['monitor.html','text/html; charset=utf-8'],'/monitor.js':['monitor.js','text/javascript; charset=utf-8'],'/monitor.css':['monitor.css','text/css; charset=utf-8']}
         if(files[path]){const [file,type]=files[path];return res.writeHead(200,{'Content-Type':type}).end(readFileSync(join(here,'ui',file),'utf8').replace('{{CSRF}}',csrf))}
         if(path==='/favicon.ico')return res.writeHead(204).end()
-        if(path==='/api/state')return json(res,200,{app:'weibo-follower-monitor',accounts:store.accounts(),activeId:service.activeId,loginId:service.reader.login?.id??null,exportError:service.exportError,exportRoot:store.exportRoot,dataRoot:root})
+        if(path==='/api/state')return json(res,200,{app:'weibo-follower-monitor',accounts:store.accounts(),activeId:service.activeId,activeIds:[...service.activeIds],concurrency:service.concurrency,loginId:service.reader.login?.id??null,exportError:service.exportError,exportRoot:store.exportRoot,dataRoot:root})
         if(path==='/api/batches')return json(res,200,store.batches().slice(0,200).map(b=>({...b,label:store.account(b.account_id).label})))
         const fileMatch=path.match(/^\/api\/batches\/(\d+)\/file$/)
         if(fileMatch){
@@ -49,6 +49,12 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
       let body='';for await(const chunk of req.setEncoding('utf8')){body+=chunk;if(body.length>16384)return json(res,413,{error:'内容过长。'})}
       const input=JSON.parse(body||'{}')
       if(path==='/api/accounts'){const a=store.addAccount(input.label);return json(res,200,{id:a.id})}
+      if(path==='/api/settings'){
+        const concurrency=Number(input.concurrency)
+        if(!Number.isInteger(concurrency)||concurrency<1||concurrency>3)throw Error('同时读取账号数必须为 1～3 之间的整数。')
+        store.setSetting('concurrency',String(concurrency))
+        return json(res,200,{ok:true,concurrency})
+      }
       if(path==='/api/folder'){mkdirSync(store.exportRoot,{recursive:true});await openLocal('explorer.exe',[store.exportRoot]);return json(res,200,{ok:true})}
       if(path==='/api/retry-exports'){store.flush();service.exportError='';return json(res,200,{ok:true})}
       if(path==='/api/stop'){json(res,200,{ok:true});setTimeout(()=>app.close(),50);return}
