@@ -218,6 +218,8 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const port=Number(process.env.WEIBO_MONITOR_PORT??8766)
   if(!Number.isInteger(port)||port<1||port>65535)throw Error('本地端口无效。')
+  process.on('unhandledRejection',(reason)=>console.error('未处理的Promise异常:',reason))
+  process.on('uncaughtException',(err)=>console.error('未处理的全局异常:',err))
   createMonitorApp({port,root:process.env.WEIBO_MONITOR_DATA_DIR}).then(async app=>{
     console.log(`微博粉丝助手 ${app.address}`)
     if(process.argv.includes('--open'))await openLocal(edgeExecutable(),[`--app=${app.address}`,'--window-size=1280,820'])

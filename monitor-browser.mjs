@@ -42,11 +42,16 @@ export class BrowserReader {
     if(!this.login)return null
     if(this.login.page.isClosed()){const id=this.login.id;this.login=null;return {id,closed:true}}
     if(Date.now()-this.login.openedAt>15*60*1000){const id=this.login.id;await this.cancelLogin();return {id,closed:true}}
-    const adapter=weiboAdapter(this.login.page)
-    const identity=await adapter.identify()
-    return {id:this.login.id,ready:identity.status==='ok',nickname:identity.nickname??null}
+    try{
+      const adapter=weiboAdapter(this.login.page)
+      const identity=await adapter.identify()
+      return {id:this.login.id,ready:identity.status==='ok',nickname:identity.nickname??null}
+    }catch{
+      if(this.login?.page?.isClosed()){const id=this.login.id;this.login=null;return {id,closed:true}}
+      return null
+    }
   }
-  async cancelLogin(){const session=this.login;this.login=null;await session?.context.close()}
+  async cancelLogin(){const session=this.login;this.login=null;await session?.context.close().catch(()=>{})}
   async scan(account,{mode=null,isKnown=null}={}) {
     let session
     if(this.login?.id===account.id){session=this.login;this.login=null}
@@ -70,7 +75,7 @@ export class BrowserReader {
       return {owner:round.owner,nickname:adapter.nickname??round.nickname??null,uids,total,complete,mode:scanMode,
         at:round.endedAt,reason:round.endReason,unresolvedLinks:round.coverage.unresolvedLinks,
         windows:round.coverage.windows,visibilityLimited:adapter.evidence.visibilityLimited}
-    } finally {clearTimeout(timeout);await session.context.close()}
+    } finally {clearTimeout(timeout);await session.context.close().catch(()=>{})}
   }
   async close(){this.login=null;await Promise.allSettled([...this.contexts].map(c=>c.close()))}
 }
