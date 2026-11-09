@@ -62,8 +62,13 @@ function backupBeforeMigration(root) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   const backupFile = join(backupDir, `monitor.before-migration-${timestamp}.sqlite`)
   copyFileSync(dbPath, backupFile)
-  if (existsSync(dbPath + '-wal')) copyFileSync(dbPath + '-wal', backupFile + '-wal')
-  if (existsSync(dbPath + '-shm')) copyFileSync(dbPath + '-shm', backupFile + '-shm')
+  if (existsSync(dbPath + '-wal')) {
+    try { copyFileSync(dbPath + '-wal', backupFile + '-wal') } catch {}
+  }
+  if (existsSync(dbPath + '-shm')) {
+    try { copyFileSync(dbPath + '-shm', backupFile + '-shm') } catch {}
+  }
+  return backupFile
 }
 
 export class MonitorStore {
@@ -78,40 +83,55 @@ export class MonitorStore {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
 
     if (isExistingDb) {
-      const hasAccounts = Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='accounts'").get())
+      const tables = new Set(this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(t => t.name))
+      const hasAccounts = tables.has('accounts')
+      const hasScans = tables.has('scans')
+      const hasSettings = tables.has('settings')
+
+      let accCols = new Set()
+      let interval5 = false
+      let accountsNeedMigration = false
       if (hasAccounts) {
-        const cols = new Set(this.db.prepare('PRAGMA table_info(accounts)').all().map(c => c.name))
-        const hasSettings = Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'").get())
-        const interval5 = Boolean(this.db.prepare('SELECT 1 FROM accounts WHERE interval_minutes=5').get())
-        const needsMigration = !cols.has('nickname') || !cols.has('full_scan_needed') || !cols.has('blocked_count') || !hasSettings || interval5
+        accCols = new Set(this.db.prepare('PRAGMA table_info(accounts)').all().map(c => c.name))
+        interval5 = Boolean(this.db.prepare('SELECT 1 FROM accounts WHERE interval_minutes=5').get())
+        accountsNeedMigration = !accCols.has('nickname') || !accCols.has('full_scan_needed') || !accCols.has('blocked_count') || !hasSettings || interval5
+      }
 
-        if (needsMigration) {
-          try { this.db.exec('PRAGMA wal_checkpoint(FULL);') } catch {}
-          backupBeforeMigration(root)
+      let scanCols = new Set()
+      let scansNeedMigration = false
+      if (hasScans) {
+        scanCols = new Set(this.db.prepare('PRAGMA table_info(scans)').all().map(c => c.name))
+        scansNeedMigration = !scanCols.has('mode') || !scanCols.has('added')
+      }
 
-          if (!cols.has('nickname')) {
+      const needsMigration = accountsNeedMigration || scansNeedMigration
+
+      if (needsMigration) {
+        try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);') } catch {}
+        backupBeforeMigration(root)
+
+        if (hasAccounts) {
+          if (!accCols.has('nickname')) {
             this.db.exec('ALTER TABLE accounts ADD COLUMN nickname TEXT;')
           }
-          if (!cols.has('full_scan_needed')) {
+          if (!accCols.has('full_scan_needed')) {
             this.db.exec('ALTER TABLE accounts ADD COLUMN full_scan_needed INTEGER NOT NULL DEFAULT 0;')
           }
-          if (!cols.has('blocked_count')) {
+          if (!accCols.has('blocked_count')) {
             this.db.exec('ALTER TABLE accounts ADD COLUMN blocked_count INTEGER NOT NULL DEFAULT 0;')
           }
           if (interval5) {
             this.db.exec('UPDATE accounts SET interval_minutes=10 WHERE interval_minutes=5;')
           }
         }
-      }
 
-      const hasScans = Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='scans'").get())
-      if (hasScans) {
-        const scanCols = new Set(this.db.prepare('PRAGMA table_info(scans)').all().map(c => c.name))
-        if (!scanCols.has('mode')) {
-          this.db.exec('ALTER TABLE scans ADD COLUMN mode TEXT;')
-        }
-        if (!scanCols.has('added')) {
-          this.db.exec('ALTER TABLE scans ADD COLUMN added INTEGER;')
+        if (hasScans) {
+          if (!scanCols.has('mode')) {
+            this.db.exec('ALTER TABLE scans ADD COLUMN mode TEXT;')
+          }
+          if (!scanCols.has('added')) {
+            this.db.exec('ALTER TABLE scans ADD COLUMN added INTEGER;')
+          }
         }
       }
     }
@@ -277,6 +297,13 @@ export class MonitorStore {
   ingest(id, scan, options = {}) {
     if (!validUid(scan.owner) || !Array.isArray(scan.uids) || scan.uids.some(u => !validUid(u))) {
       throw Error('账号身份或UID数据无效。')
+    }
+    const realRoot = process.env.LOCALAPPDATA ? resolve(join(process.env.LOCALAPPDATA, 'WeiboFollowerProbe')) : null
+    if (realRoot && resolve(this.root).toLowerCase() === realRoot.toLowerCase()) {
+      const prohibitedTestUids = new Set(['1234567890', '2345678901'])
+      if (prohibitedTestUids.has(scan.owner) || scan.uids.some(u => prohibitedTestUids.has(u))) {
+        throw Error('检测到测试 UID（1234567890 / 2345678901），严禁写入真实生产数据目录！')
+      }
     }
     const uids = [...new Set(scan.uids)], at = scan.at ?? new Date().toISOString()
     if (!Number.isFinite(Date.parse(at))) throw Error('观测时间无效。')

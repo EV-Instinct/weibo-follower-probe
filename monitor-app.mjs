@@ -26,7 +26,19 @@ async function openLocal(exe,args) {
 export async function createMonitorApp({root,port=8766,reader,importProfiles=true,autoTick=true}={}) {
   if(!root)root=join(process.env.LOCALAPPDATA,'WeiboFollowerProbe')
   const logger=new MonitorLogger(root)
-  const store=new MonitorStore(root),service=new MonitorService(store,reader??new BrowserReader(root),{logger}),csrf=randomUUID()
+  const store=new MonitorStore(root)
+
+  // 保护：如果数据库中发现 UID 为 1234567890 / 2345678901 这类测试数据，拒绝启动并给出提示
+  const prohibitedUids=['1234567890','2345678901']
+  const placeholders=prohibitedUids.map(()=>'?').join(',')
+  const hasBadOwner=Boolean(store.db.prepare(`SELECT 1 FROM accounts WHERE owner IN (${placeholders})`).get(...prohibitedUids))
+  const hasBadFollower=Boolean(store.db.prepare(`SELECT 1 FROM followers WHERE uid IN (${placeholders})`).get(...prohibitedUids))
+  if(hasBadOwner||hasBadFollower){
+    store.close()
+    throw new Error('检测到数据库中包含测试数据（UID 1234567890 / 2345678901），已拒绝启动。请清理数据库后再试。')
+  }
+
+  const service=new MonitorService(store,reader??new BrowserReader(root),{logger}),csrf=randomUUID()
   let closing=false
   const json=(res,status,value)=>res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}).end(JSON.stringify(value))
   const server=createServer({maxHeaderSize:8192},async(req,res)=>{

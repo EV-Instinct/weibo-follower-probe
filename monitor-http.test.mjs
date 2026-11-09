@@ -25,7 +25,7 @@ test('管理界面重做：账号生命周期、详情抽屉、批量操作、�
     },
     async scan() {
       return {
-        owner: '1234567890',
+        owner: '9999000001',
         nickname: '测试大V',
         uids: ['1000000001', '1000000002'],
         total: 2,
@@ -85,7 +85,7 @@ test('管理界面重做：账号生命周期、详情抽屉、批量操作、�
 
   // 4. 模拟新增 60 个 UID 并生成批次
   app.store.ingest(a.id, {
-    owner: '1234567890',
+    owner: '9999000001',
     nickname: '测试大V',
     uids: Array.from({ length: 60 }, (_, i) => String(2000000000 + i)),
     total: 62,
@@ -311,4 +311,47 @@ test('管理界面重做：账号生命周期、详情抽屉、批量操作、�
   await page.screenshot({ path: join(buildDir, 'monitor-900.png'), fullPage: true })
 
   assert.deepEqual(errors, [])
+})
+
+test('如果数据库中存在测试 UID（1234567890 / 2345678901），createMonitorApp 拒绝启动', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'weibo-polluted-check-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+
+  // 1. 账号 owner 为 1234567890 时拒绝启动
+  const { MonitorStore } = await import('./monitor-store.mjs')
+  const store = new MonitorStore(root)
+  const a = store.addAccount('测试账号', 'A')
+  store.ingest(a.id, {
+    owner: '1234567890',
+    uids: ['1000000001'],
+    complete: true,
+    total: 1,
+    reason: 'visible-end'
+  }, { mode: 'baseline' })
+  store.close()
+
+  await assert.rejects(
+    () => createMonitorApp({ root, port: 0, importProfiles: false, autoTick: false }),
+    /检测到数据库中包含测试数据（UID 1234567890 \/ 2345678901），已拒绝启动/
+  )
+
+  // 2. 粉丝 UID 中包含 2345678901 时也拒绝启动
+  const root2 = mkdtempSync(join(tmpdir(), 'weibo-polluted-check2-'))
+  t.after(() => rmSync(root2, { recursive: true, force: true }))
+
+  const store2 = new MonitorStore(root2)
+  const b = store2.addAccount('测试账号B', 'B')
+  store2.ingest(b.id, {
+    owner: '9999000002',
+    uids: ['2345678901'],
+    complete: true,
+    total: 1,
+    reason: 'visible-end'
+  }, { mode: 'baseline' })
+  store2.close()
+
+  await assert.rejects(
+    () => createMonitorApp({ root: root2, port: 0, importProfiles: false, autoTick: false }),
+    /检测到数据库中包含测试数据（UID 1234567890 \/ 2345678901），已拒绝启动/
+  )
 })

@@ -293,3 +293,75 @@ test('设置持久化：默认检查间隔在新建账号生效，自定义导�
   assert.ok(filePath.startsWith(customDir))
   assert.ok(existsSync(filePath))
 })
+
+test('用真实结构的旧数据库迁移后，backups 里必须有备份文件', t => {
+  const root = mkdtempSync(join(tmpdir(), 'weibo-real-legacy-'))
+
+  // 构建与旧版本（0.1.0 / commit bd788d7）真实结构完全一致的旧数据库
+  const legacyDb = new DatabaseSync(join(root, 'monitor.sqlite'))
+  legacyDb.exec(`
+    PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
+    CREATE TABLE accounts(
+      id TEXT PRIMARY KEY, label TEXT NOT NULL, profile TEXT UNIQUE NOT NULL, owner TEXT UNIQUE,
+      baseline_at TEXT, enabled INTEGER NOT NULL DEFAULT 0, interval_minutes INTEGER NOT NULL DEFAULT 5,
+      status TEXT NOT NULL DEFAULT 'ready', message TEXT NOT NULL DEFAULT '',
+      last_attempt TEXT, last_success TEXT, next_due INTEGER NOT NULL DEFAULT 0,
+      displayed_total INTEGER, read_count INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE batches(id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id),
+      created_at TEXT NOT NULL, count INTEGER NOT NULL, relative_path TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'reserved');
+    CREATE TABLE followers(account_id TEXT NOT NULL REFERENCES accounts(id), uid TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('historical','candidate','new')), first_seen TEXT NOT NULL,
+      confirmed_at TEXT, batch_id INTEGER REFERENCES batches(id), PRIMARY KEY(account_id,uid));
+    CREATE INDEX pending ON followers(account_id,kind,batch_id);
+    CREATE TABLE scans(id INTEGER PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id), at TEXT NOT NULL,
+      complete INTEGER NOT NULL, total INTEGER, read_count INTEGER NOT NULL, reason TEXT NOT NULL);
+  `)
+  // 插入真实账号 A（真实 UID 7718778629）、真实历史粉丝与扫描记录
+  const accountId = 'real-account-a-uuid'
+  legacyDb.prepare(`
+    INSERT INTO accounts(id, label, profile, owner, baseline_at, enabled, interval_minutes, status, message, read_count)
+    VALUES(?, '账号 A', 'A', '7718778629', '2026-11-08T08:00:00.000Z', 1, 5, 'ready', '已按可见列表完成比对。', 3)
+  `).run(accountId)
+  legacyDb.prepare("INSERT INTO followers(account_id, uid, kind, first_seen) VALUES(?, '6600000001', 'historical', '2026-11-08T08:00:00.000Z')").run(accountId)
+  legacyDb.prepare("INSERT INTO followers(account_id, uid, kind, first_seen) VALUES(?, '6600000002', 'historical', '2026-11-08T08:00:00.000Z')").run(accountId)
+  legacyDb.prepare("INSERT INTO followers(account_id, uid, kind, first_seen) VALUES(?, '6600000003', 'historical', '2026-11-08T08:00:00.000Z')").run(accountId)
+  legacyDb.prepare("INSERT INTO scans(id, account_id, at, complete, total, read_count, reason) VALUES(1, ?, '2026-11-08T08:00:00.000Z', 1, 3, 3, 'visible-end')").run(accountId)
+  legacyDb.close()
+
+  // 用 MonitorStore 打开旧数据库触发自动备份与兼容迁移
+  const store = new MonitorStore(root)
+  t.after(() => {
+    store.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  // 1. backups 目录必须存在，且必须有备份文件
+  const backupDir = join(root, 'backups')
+  assert.ok(existsSync(backupDir), 'backups 目录必须存在')
+  const backupFiles = readdirSync(backupDir).filter(f => f.startsWith('monitor.before-migration-') && f.endsWith('.sqlite'))
+  assert.ok(backupFiles.length >= 1, 'backups 目录中必须有 monitor.before-migration-*.sqlite 备份文件')
+
+  // 2. 备份文件必须保留迁移前的旧结构（无 nickname 列）
+  const backupDb = new DatabaseSync(join(backupDir, backupFiles[0]))
+  const backupCols = new Set(backupDb.prepare('PRAGMA table_info(accounts)').all().map(c => c.name))
+  assert.equal(backupCols.has('nickname'), false, '备份文件必须保留迁移前的旧结构')
+  backupDb.close()
+
+  // 3. 验证迁移后的新数据库字段补齐且数据完好
+  const a = store.account(accountId)
+  assert.equal(a.owner, '7718778629')
+  assert.equal(a.label, '账号 A')
+  assert.equal(a.interval_minutes, 10, '旧版本的 5 分钟间隔必须迁移为 10 分钟')
+  assert.equal(a.nickname, null)
+  assert.equal(a.full_scan_needed, 0)
+  assert.equal(a.blocked_count, 0)
+  assert.equal(a.historical, 3)
+
+  // 4. 验证 scans 表补充了 mode 与 added 列
+  const scansCols = new Set(store.db.prepare('PRAGMA table_info(scans)').all().map(c => c.name))
+  assert.ok(scansCols.has('mode'), 'scans 表必须补充 mode 列')
+  assert.ok(scansCols.has('added'), 'scans 表必须补充 added 列')
+
+  // 5. 验证 settings 表存在
+  assert.equal(store.getSetting('concurrency'), '1')
+})
