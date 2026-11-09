@@ -11,3 +11,4 @@ dist/
 *.sqlite-wal
 *.sqlite-shm
 exports/
+启动新版微博粉丝助手.exe

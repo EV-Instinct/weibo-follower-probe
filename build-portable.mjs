@@ -1,8 +1,9 @@
 import { mkdirSync,copyFileSync,readdirSync,writeFileSync,existsSync,unlinkSync } from 'node:fs'
 import { dirname,join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFileSync } from 'node:child_process'
 
-const root=dirname(fileURLToPath(import.meta.url)),out=join(root,'dist','微博粉丝助手_0.2.0')
+const root=dirname(fileURLToPath(import.meta.url)),out=join(root,'dist','微博粉丝助手_0.2.1')
 // fs.cpSync crashes in this Windows runtime on the Chinese workspace path.
 // Copy explicitly; fail on unexpected links instead of following outside the package.
 function copyTree(source,target){
@@ -20,9 +21,11 @@ copyTree(join(root,'node_modules','playwright-core'),join(out,'app','node_module
 copyFileSync(process.execPath,join(out,'runtime','node.exe'))
 for(const name of ['LICENSE','LICENSE.txt'])if(existsSync(join(dirname(process.execPath),name)))copyFileSync(join(dirname(process.execPath),name),join(out,'runtime',name))
 copyFileSync(join(root,'third-party','Node-LICENSE.txt'),join(out,'runtime','LICENSE.txt'))
-writeFileSync(join(out,'启动微博粉丝助手.vbs'),'Set ws = CreateObject("WScript.Shell")\r\nSet fso = CreateObject("Scripting.FileSystemObject")\r\ncurDir = fso.GetParentFolderName(WScript.ScriptFullName)\r\nws.Run Chr(34) & curDir & "\\runtime\\node.exe" & Chr(34) & " --disable-warning=ExperimentalWarning " & Chr(34) & curDir & "\\app\\monitor-app.mjs" & Chr(34) & " --open", 0, False\r\n')
-writeFileSync(join(out,'启动微博粉丝助手.cmd'),'@echo off\r\nwscript //nologo "%~dp0启动微博粉丝助手.vbs"\r\n')
+const compiler=join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe')
+execFileSync(compiler,['/nologo','/target:winexe','/optimize+','/platform:anycpu','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',`/out:${join(out,'微博粉丝助手.exe')}`,join(root,'launcher','Launcher.cs')],{windowsHide:true,stdio:'inherit'})
+copyFileSync(join(out,'微博粉丝助手.exe'),join(root,'启动新版微博粉丝助手.exe'))
+writeFileSync(join(out,'启动微博粉丝助手.cmd'),'@echo off\r\nchcp 65001 >nul\r\nstart "" "%~dp0微博粉丝助手.exe"\r\n','utf8')
 writeFileSync(join(out,'启动调试.cmd'),'@echo off\r\n"%~dp0runtime\\node.exe" --disable-warning=ExperimentalWarning "%~dp0app\\monitor-app.mjs" --open\r\npause\r\n')
 copyFileSync(join(root,'使用说明.md'),join(out,'使用说明.md'))
-writeFileSync(join(out,'版本.txt'),'微博粉丝助手 0.2.0\r\nWindows + Microsoft Edge\r\n内含 Node.js 运行时和 Playwright Core；不含任何账号登录资料、密码、真实 UID 或监测数据库。\r\n')
+writeFileSync(join(out,'版本.txt'),'微博粉丝助手 0.2.1\r\nWindows + Microsoft Edge\r\n内含 Node.js 运行时和 Playwright Core；不含任何账号登录资料、密码、真实 UID 或监测数据库。\r\n')
 console.log(out)
