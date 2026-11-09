@@ -19,6 +19,7 @@ function ownFansUrl(url, owner) {
 async function siteState(page) {
   const url = new URL(page.url())
   if (/^(?:passport\.weibo\.com|login\.sina\.com\.cn)$/.test(url.hostname)) return 'login-required'
+  if (url.pathname === '/newlogin' || url.pathname.startsWith('/newlogin')) return 'login-required'
   if (!weiboOrigin.test(url.origin)) return 'page-unverified'
   const challenge = page.getByText(/^(安全验证|访问异常|访问受限|操作频繁|请输入验证码)$/).filter({ visible: true })
   if (await challenge.count()) return 'access-blocked'
