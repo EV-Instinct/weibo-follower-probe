@@ -12,6 +12,7 @@ import { MonitorLogger } from './monitor-logger.mjs'
 import { setAutostart,isAutostartEnabled,checkDirectoryWritable } from './monitor-system.mjs'
 
 const here=dirname(fileURLToPath(import.meta.url))
+export const APP_VERSION='0.2.1'
 const isTestEnv = typeof process !== 'undefined' && Boolean(
   process.env?.NODE_TEST_CONTEXT ||
   process.env?.NODE_ENV === 'test' ||
@@ -25,8 +26,13 @@ async function openLocal(exe,args) {
 }
 export async function createMonitorApp({root,port=8766,reader,importProfiles=true,autoTick=true}={}) {
   if(!root)root=join(process.env.LOCALAPPDATA,'WeiboFollowerProbe')
-  const logger=new MonitorLogger(root)
-  const store=new MonitorStore(root)
+  root=resolve(root)
+  const server=createServer({maxHeaderSize:8192})
+  const starting=(req,res)=>res.writeHead(503).end('Starting')
+  server.on('request',starting)
+  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve)})
+  let store,logger
+  try{logger=new MonitorLogger(root);store=new MonitorStore(root)}catch(e){store?.close();await new Promise(r=>server.close(r));throw e}
 
   // 保护：如果数据库中发现 UID 为 1234567890 / 2345678901 这类测试数据，拒绝启动并给出提示
   const prohibitedUids=['1234567890','2345678901']
@@ -35,13 +41,15 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
   const hasBadFollower=Boolean(store.db.prepare(`SELECT 1 FROM followers WHERE uid IN (${placeholders})`).get(...prohibitedUids))
   if(hasBadOwner||hasBadFollower){
     store.close()
+    await new Promise(r=>server.close(r))
     throw new Error('检测到数据库中包含测试数据（UID 1234567890 / 2345678901），已拒绝启动。请清理数据库后再试。')
   }
 
   const service=new MonitorService(store,reader??new BrowserReader(root),{logger}),csrf=randomUUID()
   let closing=false
   const json=(res,status,value)=>res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}).end(JSON.stringify(value))
-  const server=createServer({maxHeaderSize:8192},async(req,res)=>{
+  server.removeListener('request',starting)
+  server.on('request',async(req,res)=>{
     const host=`127.0.0.1:${server.address().port}`,origin=`http://${host}`
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff')
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -49,11 +57,12 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
     if(req.headers.host!==host||(req.headers.origin&&req.headers.origin!==origin))return json(res,403,{error:'请求来源不正确。'})
     const url=new URL(req.url,origin),path=url.pathname
     try {
+      if(path.startsWith('/api/')&&path!=='/api/stop')store.assertStorageCurrent()
       if(req.method==='GET') {
         const files={'/':['monitor.html','text/html; charset=utf-8'],'/monitor.js':['monitor.js','text/javascript; charset=utf-8'],'/monitor.css':['monitor.css','text/css; charset=utf-8']}
         if(files[path]){const [file,type]=files[path];return res.writeHead(200,{'Content-Type':type}).end(readFileSync(join(here,'ui',file),'utf8').replace('{{CSRF}}',csrf))}
         if(path==='/favicon.ico')return res.writeHead(204).end()
-        if(path==='/api/state')return json(res,200,{app:'weibo-follower-monitor',accounts:store.accounts(),activeId:service.activeId,activeIds:[...service.activeIds],concurrency:service.concurrency,loginId:service.reader.login?.id??null,exportError:service.exportError,exportRoot:store.exportRoot,dataRoot:root})
+        if(path==='/api/state')return json(res,200,{app:'weibo-follower-monitor',version:APP_VERSION,pid:process.pid,databaseId:store.databaseId,accounts:store.accounts(),activeId:service.activeId,activeIds:[...service.activeIds],concurrency:service.concurrency,loginId:service.reader.login?.id??null,exportError:service.exportError,exportRoot:store.exportRoot,dataRoot:root})
         if(path==='/api/settings')return json(res,200,{...store.getSettings(),autostart:isAutostartEnabled()})
         if(path==='/api/batches')return json(res,200,store.batches().slice(0,200).map(b=>({...b,label:store.account(b.account_id).label})))
         const detailMatch=path.match(/^\/api\/accounts\/([a-f0-9-]+)\/detail$/)
@@ -189,7 +198,6 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
       return json(res,200,{ok:true})
     } catch(e){const message=e instanceof Error&&/^[\u4e00-\u9fff]/.test(e.message)?e.message:'操作失败，请检查数据目录和浏览器状态。';return json(res,400,{error:message})}
   })
-  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve)})}catch(e){store.close();throw e}
   const app={store,service,logger,server,address:`http://127.0.0.1:${server.address().port}/`,async close(){
     if(closing)return;closing=true
     logger.info('微博粉丝助手服务已退出')
@@ -230,12 +238,13 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
       try{
         const res=await fetch(`http://127.0.0.1:${port}/api/state`)
         const data=await res.json()
-        if(data.app==='weibo-follower-monitor'){
+        const expectedRoot=resolve(process.env.WEIBO_MONITOR_DATA_DIR||join(process.env.LOCALAPPDATA,'WeiboFollowerProbe'))
+        if(data.app==='weibo-follower-monitor'&&data.version===APP_VERSION&&resolve(data.dataRoot).toLowerCase()===expectedRoot.toLowerCase()){
           await openLocal(edgeExecutable(),[`--app=http://127.0.0.1:${port}/`,'--window-size=1280,820'])
           return
         }
       }catch{}
     }
-    console.error('启动失败，请检查端口是否被占用，以及数据目录是否可写。');process.exitCode=1
+    console.error(e.code==='EADDRINUSE'?'已有其他版本或数据目录的后台运行，请先从旧界面退出，再启动新版。':/^[\u4e00-\u9fff]/.test(e.message)?e.message:'启动失败，请检查端口是否被占用，以及数据目录是否可写。');process.exitCode=1
   })
 }

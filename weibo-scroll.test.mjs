@@ -9,7 +9,8 @@ test('真实适配器遍历虚拟滚动列表，覆盖45个UID并到达可见末
   t.after(()=>browser.close())
   const page=await browser.newPage({viewport:{width:1000,height:600}})
   await page.route('https://weibo.com/**',r=>r.fulfill({contentType:'text/html; charset=utf-8',body:`<!doctype html><html><meta charset="utf-8"><body>
-    <div role="navigation"><a href="/u/1234567890"><img alt="我"></a></div>
+    <div role="navigation"><a href="/u/1234567890"><img alt="profile"></a></div>
+    <aside><span class="name">其他用户的昵称</span></aside>
     <a href="/u/page/follow/1234567890?relate=fans">我的粉丝</a>
     <div class="woo-panel-main"><div><h2>全部粉丝（45）</h2><div class="woo-pop-wrap"><div>关注时间倒序</div></div></div>
     <div class="vue-recycle-scroller ready" style="height:4050px;position:relative"></div></div>
@@ -25,4 +26,5 @@ test('真实适配器遍历虚拟滚动列表，覆盖45个UID并到达可见末
   assert.equal(round.endReason,'visible-end')
   assert.ok(round.coverage.windows>1)
   assert.equal(round.coverage.unresolvedLinks,0)
+  assert.equal(round.nickname,null,'头像通用alt与其他用户姓名不能作为登录账号昵称')
 })

@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, linkSync, unlinkSync, copyFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, linkSync, unlinkSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { sendWindowsNotification } from './monitor-system.mjs'
 
@@ -54,20 +54,14 @@ export function formatExportRelativePath({ account, count, at = new Date(), stor
   }
 }
 
-function backupBeforeMigration(root) {
+function backupBeforeMigration(root, db) {
   const dbPath = join(root, 'monitor.sqlite')
   if (!existsSync(dbPath)) return
   const backupDir = join(root, 'backups')
   mkdirSync(backupDir, { recursive: true })
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   const backupFile = join(backupDir, `monitor.before-migration-${timestamp}.sqlite`)
-  copyFileSync(dbPath, backupFile)
-  if (existsSync(dbPath + '-wal')) {
-    try { copyFileSync(dbPath + '-wal', backupFile + '-wal') } catch {}
-  }
-  if (existsSync(dbPath + '-shm')) {
-    try { copyFileSync(dbPath + '-shm', backupFile + '-shm') } catch {}
-  }
+  db.prepare('VACUUM INTO ?').run(backupFile)
   return backupFile
 }
 
@@ -93,8 +87,8 @@ export class MonitorStore {
       let accountsNeedMigration = false
       if (hasAccounts) {
         accCols = new Set(this.db.prepare('PRAGMA table_info(accounts)').all().map(c => c.name))
-        interval5 = Boolean(this.db.prepare('SELECT 1 FROM accounts WHERE interval_minutes=5').get())
-        accountsNeedMigration = !accCols.has('nickname') || !accCols.has('full_scan_needed') || !accCols.has('blocked_count') || !hasSettings || interval5
+        accountsNeedMigration = !accCols.has('nickname') || !accCols.has('full_scan_needed') || !accCols.has('blocked_count') || !hasSettings
+        interval5 = accountsNeedMigration && Boolean(this.db.prepare('SELECT 1 FROM accounts WHERE interval_minutes=5').get())
       }
 
       let scanCols = new Set()
@@ -104,11 +98,12 @@ export class MonitorStore {
         scansNeedMigration = !scanCols.has('mode') || !scanCols.has('added')
       }
 
-      const needsMigration = accountsNeedMigration || scansNeedMigration
+      const batchesNeedMigration = tables.has('batches') && !this.db.prepare('PRAGMA table_info(batches)').all().some(c=>c.name==='export_root')
+      const needsMigration = accountsNeedMigration || scansNeedMigration || batchesNeedMigration
 
       if (needsMigration) {
-        try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);') } catch {}
-        backupBeforeMigration(root)
+        backupBeforeMigration(root, this.db)
+        if(batchesNeedMigration)this.db.exec('ALTER TABLE batches ADD COLUMN export_root TEXT')
 
         if (hasAccounts) {
           if (!accCols.has('nickname')) {
@@ -145,7 +140,7 @@ export class MonitorStore {
         displayed_total INTEGER, read_count INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
         full_scan_needed INTEGER NOT NULL DEFAULT 0, blocked_count INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS batches(id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id),
-        created_at TEXT NOT NULL, count INTEGER NOT NULL, relative_path TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'reserved');
+        created_at TEXT NOT NULL, count INTEGER NOT NULL, relative_path TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'reserved', export_root TEXT);
       CREATE TABLE IF NOT EXISTS followers(account_id TEXT NOT NULL REFERENCES accounts(id), uid TEXT NOT NULL,
         kind TEXT NOT NULL CHECK(kind IN ('historical','candidate','new')), first_seen TEXT NOT NULL,
         confirmed_at TEXT, batch_id INTEGER REFERENCES batches(id), PRIMARY KEY(account_id,uid));
@@ -155,9 +150,26 @@ export class MonitorStore {
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       INSERT OR IGNORE INTO settings(key, value) VALUES('concurrency', '1');
     `)
+    for(const batch of this.db.prepare('SELECT id,relative_path FROM batches WHERE export_root IS NULL').all()){
+      const current=this.exportRoot, original=this.defaultExportRoot
+      const directory=existsSync(join(current,batch.relative_path))?current:existsSync(join(original,batch.relative_path))?original:current
+      this.db.prepare('UPDATE batches SET export_root=? WHERE id=?').run(directory,batch.id)
+    }
+    this.databaseId=this.getSetting('database_id')??randomUUID()
+    this.setSetting('database_id',this.databaseId)
   }
 
   close() { this.db.close() }
+
+  assertStorageCurrent() {
+    let disk
+    try {
+      disk=new DatabaseSync(join(this.root,'monitor.sqlite'),{readOnly:true})
+      const id=disk.prepare("SELECT value FROM settings WHERE key='database_id'").get()?.value
+      if(id!==this.databaseId)throw Error('changed')
+    }catch{throw Error('数据库位置或身份发生变化，已停止操作。请退出程序后重新启动，不要在运行中替换数据目录。')}
+    finally{disk?.close()}
+  }
 
   get exportRoot() {
     const custom = this.getSetting('export_dir')
@@ -172,6 +184,7 @@ export class MonitorStore {
   }
 
   getBatchFilePath(batch) {
+    if(batch.export_root)return join(batch.export_root,batch.relative_path)
     const current = join(this.exportRoot, batch.relative_path)
     if (existsSync(current)) return current
     const def = join(this.defaultExportRoot, batch.relative_path)
@@ -317,6 +330,8 @@ export class MonitorStore {
       this.db.prepare('UPDATE accounts SET owner=? WHERE id=?').run(scan.owner, id)
       if (scan.nickname) {
         this.db.prepare('UPDATE accounts SET nickname=? WHERE id=?').run(scan.nickname, id)
+      } else if (/^(profile|avatar|profile picture)$/i.test(a.nickname??'')) {
+        this.db.prepare('UPDATE accounts SET nickname=NULL WHERE id=?').run(id)
       }
 
       if (scan.reason === 'legacy-history-import') {
@@ -435,7 +450,7 @@ export class MonitorStore {
           const group = rows.slice(start, start + 60)
           if (group.length < 60 && !tail) break
           const at = new Date().toISOString()
-          const id = Number(this.db.prepare('INSERT INTO batches(account_id,created_at,count) VALUES(?,?,?)').run(a.id, at, group.length).lastInsertRowid)
+          const id = Number(this.db.prepare('INSERT INTO batches(account_id,created_at,count,export_root) VALUES(?,?,?,?)').run(a.id, at, group.length,this.exportRoot).lastInsertRowid)
           const relative = formatExportRelativePath({ account: a, count: group.length, at, store: this, exportRoot: this.exportRoot })
           this.db.prepare('UPDATE batches SET relative_path=? WHERE id=?').run(relative, id)
           for (const { uid } of group) {
@@ -450,7 +465,7 @@ export class MonitorStore {
     if (created.length) fault('reserved')
 
     for (const batch of this.batches(accountId)) {
-      const destination = join(this.exportRoot, batch.relative_path)
+      const destination = this.getBatchFilePath(batch)
       if (batch.status === 'ready' && existsSync(destination)) continue
       const rows = this.db.prepare('SELECT uid FROM followers WHERE batch_id=? ORDER BY confirmed_at,first_seen,uid').all(batch.id)
       if (rows.length !== batch.count) throw Error('批次记录数量不一致，请保留数据并检查。')

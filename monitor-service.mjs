@@ -162,6 +162,7 @@ export class MonitorService {
     if (this.ticking || this.stopped || this.loginOpening) return
     this.ticking = true
     try {
+      this.store.assertStorageCurrent()
       if (!this.loginOpening && this.reader.loginState) {
         const login = await this.reader.loginState()
         if (login?.closed) {
@@ -223,8 +224,8 @@ export class MonitorService {
   }
 
   start() {
-    this.timer = setInterval(() => this.tick().catch(() => {
-      this.exportError = '后台检查遇到异常，请检查数据目录后重启。'
+    this.timer = setInterval(() => this.tick().catch((error) => {
+      this.exportError = error instanceof Error && /^[\u4e00-\u9fff]/.test(error.message) ? error.message : '后台检查遇到异常，请检查数据目录后重启。'
     }), 2000)
     this.timer.unref()
   }
@@ -233,6 +234,6 @@ export class MonitorService {
     this.stopped = true
     clearInterval(this.timer)
     await this.reader.close()
-    while (this.busy) await new Promise(r => setTimeout(r, 50))
+    while (this.busy || this.ticking) await new Promise(r => setTimeout(r, 50))
   }
 }

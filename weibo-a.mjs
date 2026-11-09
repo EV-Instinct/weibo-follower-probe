@@ -41,16 +41,16 @@ export function weiboAdapter(page, { full = false } = {}) {
     if (detectedNickname) return detectedNickname
     try {
       const name = await page.evaluate((uid) => {
+        const usable=value=>typeof value==='string'&&value.trim().length>0&&value.trim().length<=50&&!/^(我|头像|个人主页|profile|avatar|profile picture)$/i.test(value.trim())
         const navImg = document.querySelector(`div[role=navigation] a[href*="${uid}"] img`)
-        if (navImg?.alt && navImg.alt !== '我' && navImg.alt !== '头像') return navImg.alt.trim()
-        if (navImg?.title) return navImg.title.trim()
+        if (usable(navImg?.title)) return navImg.title.trim()
+        if (usable(navImg?.alt)) return navImg.alt.trim()
         const navAnchor = document.querySelector(`div[role=navigation] a[href*="${uid}"]`)
         const navText = navAnchor?.innerText?.trim()
-        if (navText && navText !== '我' && navText.length <= 30) return navText
+        if (usable(navText)) return navText
+        if(location.pathname!==`/u/${uid}`)return null
         const titleMatch = document.title.match(/^(.+?)\s*(?:的个人主页|的微博|的关注和粉丝|全部粉丝)/)
         if (titleMatch && titleMatch[1] && !titleMatch[1].includes('微博')) return titleMatch[1].trim()
-        const headerName = document.querySelector('[class*="ProfileHeader_name"], .username, .name')
-        if (headerName?.innerText?.trim()) return headerName.innerText.trim()
         return null
       }, owner)
       if (name) {
