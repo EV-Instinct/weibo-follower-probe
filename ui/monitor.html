@@ -196,28 +196,65 @@
   <!-- 设置弹窗 -->
   <dialog id="settings-dialog">
     <div class="dialog-header">
-      <h2>设置</h2>
+      <h2>系统设置</h2>
       <button type="button" data-close class="quiet-btn">✕</button>
     </div>
-    <div class="settings-content">
-      <div class="setting-item">
-        <div class="setting-text">
-          <strong>同时读取账号数</strong>
-          <p>设置系统同时检查的账号数量（1～3），每个账号仍使用独立浏览器档案。</p>
+    <form id="settings-form">
+      <div class="settings-content">
+        <div class="setting-item">
+          <div class="setting-text">
+            <strong>默认检查间隔（分钟）</strong>
+            <p>添加新账号时采用的默认检查间隔（2～1440 分钟）。</p>
+          </div>
+          <input id="settings-interval" type="number" min="2" max="1440" value="10" required class="number-input">
         </div>
-        <select id="settings-concurrency" class="select-input">
-          <option value="1">1 个账号</option>
-          <option value="2">2 个账号</option>
-          <option value="3">3 个账号</option>
-        </select>
+        <div class="setting-item">
+          <div class="setting-text">
+            <strong>同时读取账号数</strong>
+            <p>系统同时检查的账号并发数（1～3），每个账号仍使用独立浏览器档案。</p>
+          </div>
+          <select id="settings-concurrency" class="select-input">
+            <option value="1">1 个账号</option>
+            <option value="2">2 个账号</option>
+            <option value="3">3 个账号</option>
+          </select>
+        </div>
+        <div class="setting-item column">
+          <div class="setting-text full-width">
+            <div class="dir-header">
+              <strong>导出目录</strong>
+              <button type="button" id="btn-reset-export-dir" class="btn-sub-sm">恢复默认</button>
+            </div>
+            <p>新生成的粉丝 UID 导出文件保存位置（已有文件不移动）。</p>
+          </div>
+          <input id="settings-export-dir" type="text" placeholder="例如：C:\Users\用户名\Desktop\微博粉丝导出">
+        </div>
+        <div class="setting-item">
+          <div class="setting-text">
+            <strong>开机自动启动</strong>
+            <p>在当前用户的 Windows 启动文件夹中创建后台快捷方式。</p>
+          </div>
+          <label class="switch-wrap">
+            <input id="settings-autostart" type="checkbox">
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+        <div class="setting-item">
+          <div class="setting-text">
+            <strong>Windows 桌面通知</strong>
+            <p>账号需要登录/处理、或生成新的导出文件时通过系统横幅通知提醒。</p>
+          </div>
+          <label class="switch-wrap">
+            <input id="settings-notifications" type="checkbox">
+            <span class="switch-slider"></span>
+          </label>
+        </div>
       </div>
-      <div class="setting-placeholder-note">
-        <p>提示：更多设置选项将在下一阶段开放。</p>
+      <div class="dialog-actions">
+        <button type="button" data-close>取消</button>
+        <button type="submit" class="primary">保存设置</button>
       </div>
-    </div>
-    <div class="dialog-actions">
-      <button type="button" data-close class="primary">完成</button>
-    </div>
+    </form>
   </dialog>
 
   <!-- 帮助说明弹窗 -->
@@ -233,6 +270,9 @@
       <div class="help-path-box">
         <strong>导出位置：</strong>
         <span class="path" id="export-path"></span>
+      </div>
+      <div class="help-actions-box">
+        <button type="button" id="btn-open-logs" class="btn-sub">打开运行日志文件夹</button>
       </div>
     </div>
     <div class="dialog-actions">

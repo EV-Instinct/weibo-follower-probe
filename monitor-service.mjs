@@ -1,3 +1,5 @@
+import { sendWindowsNotification } from './monitor-system.mjs'
+
 const isTestEnv = typeof process !== 'undefined' && Boolean(
   process.env?.NODE_TEST_CONTEXT ||
   process.env?.NODE_ENV === 'test' ||
@@ -6,17 +8,34 @@ const isTestEnv = typeof process !== 'undefined' && Boolean(
 )
 
 export class MonitorService {
-  constructor(store, reader, { minDelay, maxDelay } = {}) {
+  constructor(store, reader, { minDelay, maxDelay, logger = null } = {}) {
     this.store = store
     this.reader = reader
+    this.logger = logger
     this.queue = new Set()
     this.activeIds = new Set()
+    this.lastNotified = new Map()
     this.stopped = false
     this.exportError = ''
     this.loginOpening = false
     this.ticking = false
     this.minDelay = minDelay !== undefined ? minDelay : (isTestEnv ? 0 : 5000)
     this.maxDelay = maxDelay !== undefined ? maxDelay : (isTestEnv ? 0 : 20000)
+  }
+
+  notifyStatusIfNeeded(id, status) {
+    if (status !== 'needs-login' && status !== 'needs-action') return
+    if (this.store.getSetting('notifications', '1') === '0') return
+    const now = Date.now()
+    const last = this.lastNotified.get(id) || 0
+    if (now - last < 3600 * 1000) return
+    this.lastNotified.set(id, now)
+    try {
+      const a = this.store.account(id)
+      const name = a.nickname || a.label
+      const desc = status === 'needs-login' ? '需要登录' : '需要处理'
+      sendWindowsNotification('微博粉丝助手', `账号「${name}」${desc}，请在管理界面中查看。`)
+    } catch {}
   }
 
   get activeId() { return [...this.activeIds][0] ?? null }
@@ -63,6 +82,7 @@ export class MonitorService {
       message,
       last_attempt: new Date().toISOString()
     })
+    this.logger?.info(`[${a.nickname || a.label}] 开始检查 (模式: ${mode})`)
 
     try {
       const knownUids = this.store.getKnownUids(id)
@@ -83,8 +103,10 @@ export class MonitorService {
         const cur = this.store.account(id)
         this.store.update(id, { message: cur.message + '；微博提示部分账号可能不展示。' })
       }
+      this.logger?.info(`[${a.nickname || a.label}] 检查完成 (模式: ${mode}, 读到: ${snapshot.uids?.length ?? 0}, 新增: ${result.added})`)
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e)
+      this.logger?.error(`[${a.nickname || a.label}] 检查失败: ${errMsg}`)
       const isBlocked = /验证码|访问限制|访问受限|访问异常|操作频繁|安全验证|access-blocked|拒绝访问/.test(errMsg)
       const isLogin = /登录/.test(errMsg) && !isBlocked
 
@@ -98,6 +120,7 @@ export class MonitorService {
             blocked_count: blockedCount,
             failures: a.failures + 1
           })
+          this.notifyStatusIfNeeded(id, 'needs-action')
         } else {
           this.store.update(id, {
             status: 'blocked',
@@ -114,6 +137,7 @@ export class MonitorService {
           enabled: 0,
           failures: a.failures + 1
         })
+        this.notifyStatusIfNeeded(id, 'needs-login')
       } else {
         const safe = /^[\u4e00-\u9fff]/.test(errMsg) ? errMsg : '读取失败，已保留历史记录，请稍后重试。'
         const failures = a.failures + 1
@@ -140,7 +164,10 @@ export class MonitorService {
     try {
       if (!this.loginOpening && this.reader.loginState) {
         const login = await this.reader.loginState()
-        if (login?.closed) this.store.update(login.id, { status: 'needs-login', message: '登录窗口已关闭，点击登录账号重试。' })
+        if (login?.closed) {
+          this.store.update(login.id, { status: 'needs-login', message: '登录窗口已关闭，点击登录账号重试。' })
+          this.notifyStatusIfNeeded(login.id, 'needs-login')
+        }
         if (login?.ready) {
           this.store.update(login.id, {
             enabled: 1,

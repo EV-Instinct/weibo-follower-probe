@@ -8,6 +8,8 @@ import { once } from 'node:events'
 import { MonitorStore } from './monitor-store.mjs'
 import { BrowserReader,edgeExecutable } from './monitor-browser.mjs'
 import { MonitorService } from './monitor-service.mjs'
+import { MonitorLogger } from './monitor-logger.mjs'
+import { setAutostart,isAutostartEnabled,checkDirectoryWritable } from './monitor-system.mjs'
 
 const here=dirname(fileURLToPath(import.meta.url))
 const isTestEnv = typeof process !== 'undefined' && Boolean(
@@ -23,7 +25,8 @@ async function openLocal(exe,args) {
 }
 export async function createMonitorApp({root,port=8766,reader,importProfiles=true,autoTick=true}={}) {
   if(!root)root=join(process.env.LOCALAPPDATA,'WeiboFollowerProbe')
-  const store=new MonitorStore(root),service=new MonitorService(store,reader??new BrowserReader(root)),csrf=randomUUID()
+  const logger=new MonitorLogger(root)
+  const store=new MonitorStore(root),service=new MonitorService(store,reader??new BrowserReader(root),{logger}),csrf=randomUUID()
   let closing=false
   const json=(res,status,value)=>res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}).end(JSON.stringify(value))
   const server=createServer({maxHeaderSize:8192},async(req,res)=>{
@@ -39,6 +42,7 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
         if(files[path]){const [file,type]=files[path];return res.writeHead(200,{'Content-Type':type}).end(readFileSync(join(here,'ui',file),'utf8').replace('{{CSRF}}',csrf))}
         if(path==='/favicon.ico')return res.writeHead(204).end()
         if(path==='/api/state')return json(res,200,{app:'weibo-follower-monitor',accounts:store.accounts(),activeId:service.activeId,activeIds:[...service.activeIds],concurrency:service.concurrency,loginId:service.reader.login?.id??null,exportError:service.exportError,exportRoot:store.exportRoot,dataRoot:root})
+        if(path==='/api/settings')return json(res,200,{...store.getSettings(),autostart:isAutostartEnabled()})
         if(path==='/api/batches')return json(res,200,store.batches().slice(0,200).map(b=>({...b,label:store.account(b.account_id).label})))
         const detailMatch=path.match(/^\/api\/accounts\/([a-f0-9-]+)\/detail$/)
         if(detailMatch){
@@ -49,7 +53,7 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
         if(fileMatch){
           const batch=store.batches().find(b=>b.id===Number(fileMatch[1]))
           if(!batch||batch.status!=='ready')return json(res,404,{error:'文件尚未生成。'})
-          const destination=join(store.exportRoot,batch.relative_path)
+          const destination=store.getBatchFilePath(batch)
           if(!existsSync(destination))store.flush()
           res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(batch.relative_path.split(/[\\/]/).at(-1))}`)
           return res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8'}).end(readFileSync(destination))
@@ -60,16 +64,42 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
       if(req.headers.origin!==origin||req.headers['x-csrf-token']!==csrf||!req.headers['content-type']?.startsWith('application/json'))return json(res,403,{error:'请求校验失败，请刷新页面。'})
       let body='';for await(const chunk of req.setEncoding('utf8')){body+=chunk;if(body.length>16384)return json(res,413,{error:'内容过长。'})}
       const input=JSON.parse(body||'{}')
-      if(path==='/api/accounts'){const a=store.addAccount(input.label);return json(res,200,{id:a.id})}
+      if(path==='/api/accounts'){const a=store.addAccount(input.label);logger.info(`添加账号: ${input.label}`);return json(res,200,{id:a.id})}
       if(path==='/api/settings'){
-        const concurrency=Number(input.concurrency)
-        if(!Number.isInteger(concurrency)||concurrency<1||concurrency>3)throw Error('同时读取账号数必须为 1～3 之间的整数。')
-        store.setSetting('concurrency',String(concurrency))
-        return json(res,200,{ok:true,concurrency})
+        if('concurrency' in input){
+          const concurrency=Number(input.concurrency)
+          if(!Number.isInteger(concurrency)||concurrency<1||concurrency>3)throw Error('同时读取账号数必须为 1～3 之间的整数。')
+          store.setSetting('concurrency',String(concurrency))
+        }
+        if('default_interval' in input){
+          const interval=Number(input.default_interval)
+          if(!Number.isInteger(interval)||interval<2||interval>1440)throw Error('默认检查间隔必须为 2～1440 分钟之间的整数。')
+          store.setSetting('default_interval',String(interval))
+        }
+        if('export_dir' in input){
+          const dir=String(input.export_dir||'').trim()
+          if(dir){
+            checkDirectoryWritable(dir)
+            store.setSetting('export_dir',resolve(dir))
+          }else{
+            store.setSetting('export_dir','')
+          }
+        }
+        if('autostart' in input){
+          const enable=Boolean(input.autostart)
+          setAutostart(enable,{appDir:here})
+          store.setSetting('autostart',enable?'1':'0')
+        }
+        if('notifications' in input){
+          store.setSetting('notifications',input.notifications?'1':'0')
+        }
+        logger.info('系统设置已更新',store.getSettings())
+        return json(res,200,{ok:true,settings:{...store.getSettings(),autostart:isAutostartEnabled()}})
       }
       if(path==='/api/folder'){mkdirSync(store.exportRoot,{recursive:true});await openLocal('explorer.exe',[store.exportRoot]);return json(res,200,{ok:true})}
+      if(path==='/api/logs/folder'){mkdirSync(logger.logsDir,{recursive:true});await openLocal('explorer.exe',[logger.logsDir]);return json(res,200,{ok:true})}
       if(path==='/api/retry-exports'){store.flush();service.exportError='';return json(res,200,{ok:true})}
-      if(path==='/api/stop'){json(res,200,{ok:true});setTimeout(()=>app.close(),50);return}
+      if(path==='/api/stop'){logger.info('收到停止指令');json(res,200,{ok:true});setTimeout(()=>app.close(),50);return}
       if(path==='/api/batch-actions'){
         const action=input.action
         if(action==='start'){
@@ -79,14 +109,17 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
               store.update(a.id,{enabled:1,next_due:0});service.enqueue(a.id);count++
             }
           }
+          logger.info(`批量开始检查: ${count} 个账号`)
           return json(res,200,{ok:true,count})
         }
         if(action==='pause'){
           for(const a of store.accounts())service.pause(a.id)
+          logger.info('批量暂停所有账号')
           return json(res,200,{ok:true})
         }
         if(action==='tail'){
           const created=store.flush({tail:true})
+          logger.info(`批量导出尾数: ${created.length} 份批次`)
           return json(res,200,{ok:true,count:created.length})
         }
         throw Error('未知的批量操作。')
@@ -96,7 +129,7 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
         const batchId=Number(batchActionMatch[1]),batchAct=batchActionMatch[2]
         const batch=store.batches().find(b=>b.id===batchId)
         if(!batch||batch.status!=='ready')throw Error('文件尚未生成。')
-        const destination=join(store.exportRoot,batch.relative_path)
+        const destination=store.getBatchFilePath(batch)
         if(!existsSync(destination))store.flush()
         if(!existsSync(destination))throw Error('找不到导出的文件。')
         if(batchAct==='open'){
@@ -145,8 +178,9 @@ export async function createMonitorApp({root,port=8766,reader,importProfiles=tru
     } catch(e){const message=e instanceof Error&&/^[\u4e00-\u9fff]/.test(e.message)?e.message:'操作失败，请检查数据目录和浏览器状态。';return json(res,400,{error:message})}
   })
   try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve)})}catch(e){store.close();throw e}
-  const app={store,service,server,address:`http://127.0.0.1:${server.address().port}/`,async close(){
+  const app={store,service,logger,server,address:`http://127.0.0.1:${server.address().port}/`,async close(){
     if(closing)return;closing=true
+    logger.info('微博粉丝助手服务已退出')
     await new Promise(resolve=>server.close(resolve));await service.close();store.close()
   }}
   if(importProfiles&&!store.accounts().length){

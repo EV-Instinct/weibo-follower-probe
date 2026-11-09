@@ -58,7 +58,7 @@ export class BrowserReader {
     const timeout=setTimeout(()=>session.context.close().catch(()=>{}),timeoutMs)
     try{
       await this.home(session.page)
-      const adapter=weiboAdapter(session.page,{full:isFull})
+      const adapter=weiboAdapter(session.page,{full:true})
       const round=await collectRound(adapter,{expectedOwner:account.owner,maxWindows,isKnown,mode:scanMode})
       if(!round.owner){const messages={'login-required':'登录已失效，请点击登录账号。','identity-mismatch':'登录账号与已绑定账号不一致，请登录原账号。','access-blocked':'出现验证码或访问限制，请点击登录账号处理。'};throw Error(messages[round.endReason]??'无法核实登录身份，请点击登录账号检查。')}
       const uids=[...new Set(round.pages.flat())], total=round.coverage.exactTotals.length===1?round.coverage.exactTotals[0]:null

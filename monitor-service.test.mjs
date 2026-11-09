@@ -134,3 +134,35 @@ test('全局设置「同时读取账号数」1～3 并发调度与随机间隔�
   await service.tick()
   assert.equal(peakActive, 3) // 3 个账号同时执行！
 })
+
+test('Windows 通知限频：同一账号进入需要登录/处理时 1 小时内只提醒一次', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'weibo-notify-')), store = new MonitorStore(root)
+  t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }) })
+  const a = store.addAccount('提醒测试')
+  store.update(a.id, { enabled: 1 })
+
+  const reader = {
+    async scan() { throw Error('登录已失效，请重新登录') },
+    async close() {}
+  }
+  const service = new MonitorService(store, reader, { minDelay: 0, maxDelay: 0 })
+
+  // 第一次触发
+  service.enqueue(a.id)
+  await service.tick()
+  assert.equal(store.account(a.id).status, 'needs-login')
+  const firstNoticeTime = service.lastNotified.get(a.id)
+  assert.ok(firstNoticeTime)
+
+  // 立即再次触发（模拟再次检测）
+  service.enqueue(a.id)
+  await service.tick()
+  // 时间戳未变，说明 1 小时内被防抖限频
+  assert.equal(service.lastNotified.get(a.id), firstNoticeTime)
+
+  // 模拟过了 1 小时之后再次触发
+  service.lastNotified.set(a.id, Date.now() - 3601 * 1000)
+  service.enqueue(a.id)
+  await service.tick()
+  assert.ok(service.lastNotified.get(a.id) > firstNoticeTime)
+})

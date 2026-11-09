@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname,join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
-const root=dirname(fileURLToPath(import.meta.url)),out=join(root,'dist','微博粉丝助手_0.1.0')
+const root=dirname(fileURLToPath(import.meta.url)),out=join(root,'dist','微博粉丝助手_0.2.0')
 const temp=mkdtempSync(join(tmpdir(),'weibo-portable-')),probe=createServer()
 await new Promise(r=>probe.listen(0,'127.0.0.1',r));const port=probe.address().port;await new Promise(r=>probe.close(r))
 const child=spawn(join(out,'runtime','node.exe'),['--disable-warning=ExperimentalWarning',join(out,'app','monitor-app.mjs')],{env:{...process.env,WEIBO_MONITOR_DATA_DIR:temp,WEIBO_MONITOR_PORT:String(port)},windowsHide:true,stdio:['ignore','pipe','pipe']})

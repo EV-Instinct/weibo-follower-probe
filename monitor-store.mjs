@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, linkSync, unlinkSync, copyFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
+import { sendWindowsNotification } from './monitor-system.mjs'
 
 const validUid = value => typeof value === 'string' && /^[1-9]\d{0,19}$/.test(value)
 
@@ -68,7 +69,6 @@ function backupBeforeMigration(root) {
 export class MonitorStore {
   constructor(root) {
     this.root = root
-    this.exportRoot = join(root, 'exports')
     mkdirSync(root, { recursive: true })
 
     const dbPath = join(root, 'monitor.sqlite')
@@ -139,6 +139,37 @@ export class MonitorStore {
 
   close() { this.db.close() }
 
+  get exportRoot() {
+    const custom = this.getSetting('export_dir')
+    if (custom && typeof custom === 'string' && custom.trim()) {
+      return resolve(custom.trim())
+    }
+    return join(this.root, 'exports')
+  }
+
+  get defaultExportRoot() {
+    return join(this.root, 'exports')
+  }
+
+  getBatchFilePath(batch) {
+    const current = join(this.exportRoot, batch.relative_path)
+    if (existsSync(current)) return current
+    const def = join(this.defaultExportRoot, batch.relative_path)
+    if (existsSync(def)) return def
+    return current
+  }
+
+  getSettings() {
+    return {
+      concurrency: Math.min(3, Math.max(1, Number(this.getSetting('concurrency', '1')) || 1)),
+      default_interval: Math.min(1440, Math.max(2, Number(this.getSetting('default_interval', '10')) || 10)),
+      export_dir: this.getSetting('export_dir', '') || join(this.root, 'exports'),
+      default_export_dir: join(this.root, 'exports'),
+      autostart: this.getSetting('autostart', '0') === '1',
+      notifications: this.getSetting('notifications', '1') !== '0',
+    }
+  }
+
   transaction(fn) {
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -168,12 +199,14 @@ export class MonitorStore {
     return new Set(this.db.prepare("SELECT uid FROM followers WHERE account_id=? AND kind IN ('historical','new')").all(accountId).map(r => r.uid))
   }
 
-  addAccount(label, profile = randomUUID()) {
+  addAccount(label, profile = randomUUID(), interval = null) {
     if (typeof label !== 'string' || !label.trim() || label.length > 80 || !/^[A-Za-z0-9_-]{1,80}$/.test(profile)) {
       throw Error('账号名称或档案无效。')
     }
+    const defaultInterval = Math.min(1440, Math.max(2, Number(this.getSetting('default_interval', '10')) || 10))
+    const intervalMinutes = interval != null ? Number(interval) : defaultInterval
     const id = randomUUID()
-    this.db.prepare('INSERT INTO accounts(id,label,profile,interval_minutes) VALUES(?,?,?,10)').run(id, label.trim(), profile)
+    this.db.prepare('INSERT INTO accounts(id,label,profile,interval_minutes) VALUES(?,?,?,?)').run(id, label.trim(), profile, intervalMinutes)
     return this.account(id)
   }
 
@@ -405,6 +438,13 @@ export class MonitorStore {
       }
       fault('written')
       this.db.prepare("UPDATE batches SET status='ready' WHERE id=?").run(batch.id)
+      if (this.getSetting('notifications', '1') !== '0') {
+        try {
+          const a = this.account(batch.account_id)
+          const name = a.nickname || a.label
+          sendWindowsNotification('微博粉丝助手', `${name} 导出 ${batch.count} 个`)
+        } catch {}
+      }
     }
     return created
   }

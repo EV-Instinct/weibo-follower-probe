@@ -267,3 +267,29 @@ test('对旧数据库的兼容迁移：备份到 backups/，字段补全，间�
   // 待导出变为 0
   assert.equal(store.account(accId).pending, 0)
 })
+
+test('设置持久化：默认检查间隔在新建账号生效，自定义导出目录隔离新旧批次', t => {
+  const env = setup(t)
+  const { store, root } = env
+
+  // 1. 设置默认间隔为 20 分钟
+  store.setSetting('default_interval', '20')
+  const newAccount = store.addAccount('新间隔账号')
+  assert.equal(newAccount.interval_minutes, 20)
+
+  // 2. 自定义导出目录
+  const customDir = join(root, 'custom-exports-test')
+  store.setSetting('export_dir', customDir)
+  assert.equal(store.exportRoot, customDir)
+
+  // 建立基线并新增粉丝导出
+  store.ingest(newAccount.id, scan(ids(10), true, '9999999999'))
+  store.ingest(newAccount.id, scan(ids(15), true, '9999999999'))
+  const batches = store.flush({ accountId: newAccount.id, tail: true })
+  assert.equal(batches.length, 1)
+
+  const batch = store.batches(newAccount.id)[0]
+  const filePath = store.getBatchFilePath(batch)
+  assert.ok(filePath.startsWith(customDir))
+  assert.ok(existsSync(filePath))
+})

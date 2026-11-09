@@ -234,7 +234,51 @@ test('管理界面重做：账号生命周期、详情抽屉、批量操作、�
   assert.equal(existsSync(profileDir), false)
   assert.equal(app.store.accounts().length, 0)
 
-  // 12. 截图测试：分别在 1280 宽度和 900 宽度下捕获截图保存到 .build/
+  // 12. 验证设置 API：默认间隔、同时读取数、导出目录检查与日志接口
+  const getSettingsRes = await fetch(`${app.address}api/settings`)
+  assert.equal(getSettingsRes.status, 200)
+  const settingsData = await getSettingsRes.json()
+  assert.equal(settingsData.concurrency, 1)
+  assert.equal(settingsData.default_interval, 10)
+
+  // 修改设置
+  const customExportDir = join(root, 'custom-exports')
+  const saveSettingsRes = await fetch(`${app.address}api/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: new URL(app.address).origin, 'X-CSRF-Token': csrf },
+    body: JSON.stringify({
+      concurrency: 2,
+      default_interval: 15,
+      export_dir: customExportDir,
+      notifications: true,
+      autostart: false
+    })
+  })
+  assert.equal(saveSettingsRes.status, 200)
+  assert.equal(app.store.exportRoot, customExportDir)
+  assert.equal(app.store.getSetting('concurrency'), '2')
+  assert.equal(app.store.getSetting('default_interval'), '15')
+
+  // 验证不合法的设置值会被拦截
+  const badInterval = await fetch(`${app.address}api/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: new URL(app.address).origin, 'X-CSRF-Token': csrf },
+    body: JSON.stringify({ default_interval: 1 })
+  })
+  assert.equal(badInterval.status, 400)
+
+  // 验证日志文件夹接口与日志写入
+  const logFolderRes = await fetch(`${app.address}api/logs/folder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: new URL(app.address).origin, 'X-CSRF-Token': csrf },
+    body: '{}'
+  })
+  assert.equal(logFolderRes.status, 200)
+  app.logger.info('这是一条测试日志包含敏感信息: cookie=SECRET_COOKIE; token=MY_TOKEN')
+  const logDir = join(root, 'logs')
+  assert.equal(existsSync(logDir), true)
+
+  // 13. 截图测试：分别在 1280 宽度和 900 宽度下捕获截图保存到 .build/
   const buildDir = join(process.cwd(), '.build')
   mkdirSync(buildDir, { recursive: true })
 

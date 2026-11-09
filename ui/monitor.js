@@ -610,15 +610,41 @@ $('batch-tail').onclick = () => {
 $('folder').onclick = () => action(() => api('/api/folder', {}), $('folder'))
 $('add').onclick = $('empty-add').onclick = () => editAccount()
 
-$('btn-settings').onclick = () => {
-  $('settings-concurrency').value = state.concurrency || 1
+$('btn-settings').onclick = () => action(async () => {
+  const settings = await (await fetch('/api/settings')).json()
+  $('settings-interval').value = settings.default_interval || 10
+  $('settings-concurrency').value = settings.concurrency || 1
+  $('settings-export-dir').value = settings.export_dir || ''
+  $('settings-export-dir').dataset.default = settings.default_export_dir || ''
+  $('settings-autostart').checked = Boolean(settings.autostart)
+  $('settings-notifications').checked = Boolean(settings.notifications)
   $('settings-dialog').showModal()
+}, $('btn-settings'))
+
+$('btn-reset-export-dir').onclick = () => {
+  $('settings-export-dir').value = $('settings-export-dir').dataset.default || ''
 }
 
-$('settings-concurrency').onchange = () => action(async () => {
-  await api('/api/settings', { concurrency: Number($('settings-concurrency').value) })
-  toast('同时读取账号数已更新。')
-})
+$('settings-form').onsubmit = e => {
+  e.preventDefault()
+  action(async () => {
+    const data = {
+      default_interval: Number($('settings-interval').value),
+      concurrency: Number($('settings-concurrency').value),
+      export_dir: $('settings-export-dir').value.trim(),
+      autostart: $('settings-autostart').checked,
+      notifications: $('settings-notifications').checked
+    }
+    await api('/api/settings', data)
+    $('settings-dialog').close()
+    toast('系统设置已保存。')
+  }, e.submitter)
+}
+
+$('btn-open-logs').onclick = () => action(async () => {
+  await api('/api/logs/folder', {})
+  toast('已在资源管理器中打开日志文件夹。')
+}, $('btn-open-logs'))
 
 $('btn-help').onclick = () => {
   $('help-dialog').showModal()

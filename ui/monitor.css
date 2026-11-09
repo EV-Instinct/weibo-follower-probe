@@ -906,6 +906,87 @@ select:focus {
   border-bottom: 1px solid var(--border-light);
 }
 
+.setting-item.column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.setting-item .dir-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.setting-item .number-input {
+  width: 90px;
+  text-align: right;
+  margin-top: 0;
+}
+
+.setting-text.full-width {
+  width: 100%;
+}
+
+.switch-wrap {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.switch-wrap input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: #cbd5d1;
+  transition: .2s;
+  border-radius: 24px;
+}
+
+.switch-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .2s;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+.switch-wrap input:checked + .switch-slider {
+  background-color: var(--green);
+}
+
+.switch-wrap input:checked + .switch-slider:before {
+  transform: translateX(20px);
+}
+
+.help-actions-box {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  justify-content: flex-end;
+}
+
+#settings-dialog {
+  width: 500px;
+  max-width: min(560px, calc(100vw - 32px));
+}
+
 .setting-text strong {
   display: block;
   font-size: 14px;
