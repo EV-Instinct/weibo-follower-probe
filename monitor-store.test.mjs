@@ -181,8 +181,8 @@ test('文件名格式、非法字符处理、同名加 _2', t => {
   assert.equal(batch1.relative_path.includes('<'), false)
   assert.equal(batch1.relative_path.includes('>'), false)
   assert.equal(batch1.relative_path.includes('|'), false)
-  // 文件名符合：月.日 时.分 60个 账号名.txt
-  assert.match(batch1.relative_path, /\d+\.\d+ \d+\.\d{2} 60个 .+\.txt$/)
+  // 文件名符合：月.日_时.分_博主备注_UID博主UID_60条.txt
+  assert.match(batch1.relative_path, /\d{2}\.\d{2}_\d{2}\.\d{2}_.+_UID\d+_60条\.txt$/)
 
   // 第二次添加 60 个，同时间生成批次 -> 同名冲突依次加 _2
   store.ingest(a.id, scan(ids(60, 2000000000)), { mode: 'incremental' })

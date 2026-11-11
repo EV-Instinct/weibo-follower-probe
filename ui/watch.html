@@ -1,18 +1,131 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="csrf-token" content="{{CSRF}}"><title>微博粉丝助手 · 博主监控</title><link rel="stylesheet" href="/watch.css"><script src="/watch.js" defer></script></head>
 <body>
-<header><div class="brand"><b class="mark">微</b><div><h1>微博粉丝助手 <span>博主监控</span></h1><p>一个查看账号 · 输入博主 UID · 每满 60 条自动出文件</p></div></div><nav><button id="settings">设置</button><button id="help">使用说明</button><button id="exit" class="danger">退出程序</button></nav></header>
+<header><div class="brand"><b class="mark">微</b><div><h1>微博粉丝助手 <span>博主监控</span></h1><p>多查看账号池分流 · 支持 50~100+ 目标 · 智能自适应巡检</p></div></div><nav><button id="settings">设置</button><button id="help">使用说明</button><button id="exit" class="danger">退出程序</button></nav></header>
 <main>
-<section class="viewer"><div><span class="eyebrow">我的查看账号</span><h2 id="viewerTitle">正在连接…</h2><p id="viewerMessage">正在读取登录状态</p></div><div class="viewer-actions"><button id="login" class="primary">登录查看账号</button><button id="cancelLogin" hidden>取消登录</button></div></section>
+<section class="pool-section">
+  <div class="pool-header">
+    <div>
+      <span class="eyebrow">查看账号池（多通道并行巡检）</span>
+      <h2>账号池状态</h2>
+    </div>
+    <div class="pool-actions">
+      <button id="addViewerBtn" class="primary">+ 添加查看小号</button>
+      <button id="cancelLogin" hidden>取消当前登录</button>
+    </div>
+  </div>
+  <div id="viewersList" class="viewers-grid"></div>
+  <div hidden><h2 id="viewerTitle"></h2><p id="viewerMessage"></p></div>
+</section>
+
 <div id="error" class="error" role="alert" hidden></div><div id="toast" role="status" hidden></div>
-<section class="metrics"><div><span>监控目标</span><strong id="targetCount">0</strong><small>通过 UID 添加</small></div><div><span>今日新增记录</span><strong id="todayCount">0</strong><small>包含观察到的重新关注</small></div><div><span>待导出记录</span><strong id="pendingCount">0</strong><small>每个目标分别累计</small></div><div><span>已生成文件</span><strong id="batchCount">0</strong><small>每满 60 条自动导出</small></div></section>
-<section class="workspace"><div class="section-title"><div><h2>监控列表</h2><p>首次读取建立底册，之后记录顶部出现的新关注。</p></div><button id="folder">打开导出文件夹</button></div>
-<form id="addForm"><label>博主 UID<input id="uid" name="uid" placeholder="例如 1856404484" inputmode="numeric" maxlength="20" pattern="[1-9][0-9]{4,19}" required></label><label>备注（可选）<input id="label" name="label" placeholder="例如 凤凰网科技" maxlength="80"></label><button class="primary" type="submit">添加监控</button></form>
-<div id="targets"></div><div id="empty" hidden><h3>添加第一个监控博主</h3><p>在上方输入对方的 UID，无需登录对方账号。</p></div>
-<footer>比较列表顶部顺序，不要求读取全部历史粉丝。列表无法衔接时会提示处理，不会把整批粉丝直接记为新增。</footer></section>
+
+<section class="metrics">
+  <div><span>监控目标</span><strong id="targetCount">0</strong><small id="activeTargetsInfo">0 个正在巡检</small></div>
+  <div><span>今日新增记录</span><strong id="todayCount">0</strong><small>包含观察到的重新关注</small></div>
+  <div><span>待导出记录</span><strong id="pendingCount">0</strong><small>每个目标分别累计</small></div>
+  <div><span>已生成文件</span><strong id="batchCount">0</strong><small>每满 60 条自动导出</small></div>
+</section>
+
+<section class="workspace">
+  <div class="section-title">
+    <div>
+      <h2>监控目标列表</h2>
+      <p>智能自适应巡检：活跃快巡 30 秒，静默省流 4~10 分钟；出现新增瞬间唤醒。</p>
+    </div>
+    <div class="header-btns">
+      <button id="openBatchAdd" class="primary">批量添加监控</button>
+      <button id="folder">打开导出文件夹</button>
+    </div>
+  </div>
+
+  <form id="addForm">
+    <label>博主 UID<input id="uid" name="uid" placeholder="例如 1856404484" inputmode="numeric" maxlength="20" pattern="[1-9][0-9]{4,19}" required></label>
+    <label>备注（可选）<input id="label" name="label" placeholder="例如 凤凰网科技" maxlength="80"></label>
+    <button class="primary" type="submit">添加监控</button>
+  </form>
+
+  <div class="toolbar">
+    <div class="filters" id="statusFilters">
+      <button class="filter-tab active" data-filter="all">全部 (<span id="countAll">0</span>)</button>
+      <button class="filter-tab" data-filter="running">监控中 (<span id="countRunning">0</span>)</button>
+      <button class="filter-tab" data-filter="pending">有待导出 (<span id="countPending">0</span>)</button>
+      <button class="filter-tab" data-filter="warn">异常需核对 (<span id="countWarn">0</span>)</button>
+      <button class="filter-tab" data-filter="paused">已暂停 (<span id="countPaused">0</span>)</button>
+    </div>
+    <div class="search-box">
+      <input id="searchInput" placeholder="搜索 UID 或备注…" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="batch-bar">
+    <span class="batch-label">批量操作：</span>
+    <button id="batchStartBtn">一键全部开始</button>
+    <button id="batchPauseBtn">一键全部暂停</button>
+    <button id="batchSettingsBtn">批量修改设置</button>
+    <button id="batchTailBtn">一键导出所有尾数</button>
+  </div>
+
+  <div id="targets"></div>
+  <div id="empty" hidden><h3>暂无匹配的监控目标</h3><p>在上方添加博主 UID，或切换筛选条件。</p></div>
+  <footer>多通道并行巡检，自动顺位哨兵链比对。遇账号受限自动故障转移至其他小号，保障任务持续运行。</footer>
+</section>
 </main>
+
+<dialog id="batchAddDialog" class="wide">
+  <h2>批量添加监控目标</h2>
+  <p>每行一个目标，支持格式：<code>UID</code> 或 <code>UID 备注</code>（空格、逗号或制表符分隔）。系统自动去重并剔除非法 UID。</p>
+  <textarea id="batchText" rows="10" placeholder="例如：&#10;1856404484 凤凰网科技&#10;2803301701 人民日报&#10;1642634100"></textarea>
+  <div class="actions">
+    <button type="button" data-close>取消</button>
+    <button id="submitBatchAdd" class="primary">确认批量导入</button>
+  </div>
+</dialog>
+
+<dialog id="batchSettingsDialog">
+  <h2>批量修改目标设置</h2>
+  <form id="batchSettingsForm">
+    <label>基准检查间隔（分钟）<input id="batchInterval" type="number" min="1" max="1440" value="2" required></label>
+    <label class="checkbox-label"><input type="checkbox" id="batchAdaptive" checked> 启用智能自适应分级轮询（推荐：有新增快巡 30 秒，静默省流 4~10 分钟）</label>
+    <div class="actions">
+      <button type="button" data-close>取消</button>
+      <button type="submit" class="primary">应用到全部目标</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="addViewerDialog">
+  <h2>添加查看小号</h2>
+  <form id="addViewerForm">
+    <label>浏览器档案名（英文、数字或下划线）<input id="viewerProfileInput" placeholder="例如 viewer_2" pattern="[a-zA-Z0-9_-]{1,80}" required></label>
+    <label>账号备注<input id="viewerLabelInput" placeholder="例如 备用小号2" maxlength="80"></label>
+    <p>添加后点击“登录”，系统会打开独立浏览器窗口供你扫码或登录微博。</p>
+    <div class="actions">
+      <button type="button" data-close>取消</button>
+      <button type="submit" class="primary">确认添加</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="settingsDialog"><form id="settingsForm"><h2>导出设置</h2><label>导出文件夹<input id="exportDir" required></label><p>新文件保存到此处；已生成文件保留原位置。</p><div class="actions"><button type="button" data-close>取消</button><button class="primary" type="submit">保存设置</button></div></form></dialog>
-<dialog id="targetDialog"><form id="targetForm"><h2>目标设置</h2><label>备注<input id="targetLabel" required maxlength="80"></label><label>检查间隔（分钟）<input id="targetInterval" type="number" min="1" max="1440" required></label><p>多个目标共用一个登录账号，按顺序检查。</p><div class="actions"><button type="button" data-close>取消</button><button type="submit" class="primary">保存目标设置</button></div></form></dialog>
+
+<dialog id="targetDialog"><form id="targetForm"><h2>目标设置</h2>
+  <label>备注<input id="targetLabel" required maxlength="80"></label>
+  <label>检查间隔（分钟）<input id="targetInterval" type="number" min="1" max="1440" required></label>
+  <label class="checkbox-label"><input type="checkbox" id="targetAdaptive" checked> 启用智能自适应动态间隔（有新增自动缩短至 30 秒快巡）</label>
+  <p>多账号池并发分流巡检，单账号内部串行且带微抖动。</p>
+  <div class="actions"><button type="button" data-close>取消</button><button type="submit" class="primary">保存目标设置</button></div>
+</form></dialog>
+
 <dialog id="detailDialog" class="wide"><div class="section-title"><h2 id="detailTitle">记录与文件</h2><button data-close>关闭详情</button></div><div id="detailContent"></div></dialog>
-<dialog id="helpDialog" class="wide"><h2>使用说明</h2><ol><li>登录一个自己的微博查看账号。</li><li>输入其他博主的 UID 添加监控，首次读取仅建立顶部底册。</li><li>默认每 2 分钟检查，目标依次读取；可在目标设置中调整。</li><li>新 UID 或旧 UID 再次进入列表顶部，按新关注记录累计；同一轮不重复记录。</li><li>每个目标满 60 条自动生成 TXT，一行一个 UID；“导出尾数”可手动导出不足 60 条的记录。</li></ol><p>两次检查之间发生、且列表顺序未留下变化的取关再关注无法识别。页面过滤或排序变化也可能影响判断；无法可靠衔接时显示“需要核对”。</p><p>关闭窗口后后台继续运行。彻底停止请点击“退出程序”。旧版数据库、登录档案和导出文件保留；旧账号不会自动当作监控目标。</p><div class="actions"><button data-close>知道了</button></div></dialog>
+
+<dialog id="helpDialog" class="wide"><h2>使用说明</h2>
+  <ol>
+    <li><b>多查看账号池</b>：支持配置多个微博查看小号。系统自动多通道并行分流巡检不同博主，并在某号受限时自动转移给其他号接管。</li>
+    <li><b>批量添加与管理</b>：支持一次性粘贴几十上百个博主 UID 批量导入，支持一键批量开始、暂停、修改间隔和一键导出所有尾数。</li>
+    <li><b>智能动态调频</b>：活跃目标自动 30 秒快巡防哨兵被冲刷；长期无新增目标阶梯放缓至 4~10 分钟静默省流；出现新增瞬间唤醒切回高频。</li>
+    <li><b>顺位哨兵链</b>：顶部前 20 人候补哨兵链无缝比对，旧粉取关自动顺延，旧粉重新关注防误判，解决后半段微调误报 gap 的问题。</li>
+  </ol>
+  <div class="actions"><button data-close>知道了</button></div>
+</dialog>
 </body></html>

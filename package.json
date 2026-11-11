@@ -1,7 +1,25 @@
 {
   "name": "weibo-follower-probe",
   "version": "0.3.0",
-  "private": true,
+  "description": "基于 Microsoft Edge 与顺位哨兵链机制的微博公开粉丝列表高频监控与批量导出助手",
+  "keywords": [
+    "weibo",
+    "follower-monitor",
+    "playwright",
+    "sentinel-chain",
+    "weibo-crawler",
+    "edge-automation"
+  ],
+  "homepage": "https://github.com/EV-Instinct/weibo-follower-probe#readme",
+  "bugs": {
+    "url": "https://github.com/EV-Instinct/weibo-follower-probe/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EV-Instinct/weibo-follower-probe.git"
+  },
+  "license": "MIT",
+  "author": "EV-Instinct",
   "type": "module",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning watch-app.mjs --open",
@@ -9,6 +27,9 @@
     "build": "node build-portable.mjs",
     "read:a": "node read-a.mjs",
     "test": "node --test --test-concurrency=1"
+  },
+  "engines": {
+    "node": ">=22.5.0"
   },
   "dependencies": {
     "playwright-core": "1.65.0"

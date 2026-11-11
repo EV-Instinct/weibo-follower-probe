@@ -18,14 +18,14 @@ mkdirSync(join(out,'app','node_modules'),{recursive:true});mkdirSync(join(out,'r
 for(const file of ['watch-app.mjs','watch-store.mjs','watch-service.mjs','watch-browser.mjs','monitor-browser.mjs','monitor-store.mjs','monitor-system.mjs','weibo-a.mjs','browser-round.mjs','observations.mjs','observation-store.mjs'])copyFileSync(join(root,file),join(out,'app',file))
 copyTree(join(root,'ui'),join(out,'app','ui'))
 copyTree(join(root,'node_modules','playwright-core'),join(out,'app','node_modules','playwright-core'))
-copyFileSync(process.execPath,join(out,'runtime','node.exe'))
+try{copyFileSync(process.execPath,join(out,'runtime','node.exe'))}catch(e){if(e.code==='EBUSY'&&existsSync(join(out,'runtime','node.exe')))console.log('runtime/node.exe 正在被运行中的实例占用，沿用已有可执行文件。');else throw e}
 for(const name of ['LICENSE','LICENSE.txt'])if(existsSync(join(dirname(process.execPath),name)))copyFileSync(join(dirname(process.execPath),name),join(out,'runtime',name))
 copyFileSync(join(root,'third-party','Node-LICENSE.txt'),join(out,'runtime','LICENSE.txt'))
 const compiler=join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe')
 execFileSync(compiler,['/nologo','/target:winexe','/optimize+','/platform:anycpu','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',`/out:${join(out,'微博粉丝助手.exe')}`,join(root,'launcher','Launcher.cs')],{windowsHide:true,stdio:'inherit'})
 copyFileSync(join(out,'微博粉丝助手.exe'),join(root,'启动新版微博粉丝助手.exe'))
-writeFileSync(join(out,'启动微博粉丝助手.cmd'),'@echo off\r\nchcp 65001 >nul\r\nstart "" "%~dp0微博粉丝助手.exe"\r\n','utf8')
-writeFileSync(join(out,'启动调试.cmd'),'@echo off\r\n"%~dp0runtime\\node.exe" --disable-warning=ExperimentalWarning "%~dp0app\\watch-app.mjs" --open\r\npause\r\n')
-copyFileSync(join(root,'使用说明.md'),join(out,'使用说明.md'))
-writeFileSync(join(out,'版本.txt'),'微博粉丝助手 0.3.0 · 一个查看账号监控多个博主\r\nWindows + Microsoft Edge\r\n内含 Node.js 运行时和 Playwright Core；不含任何账号登录资料、密码、真实 UID 或监测数据库。\r\n')
+for(const extra of ['使用说明.md','版本.txt','启动微博粉丝助手.cmd','启动调试.cmd']){
+  const p=join(out,extra)
+  if(existsSync(p))unlinkSync(p)
+}
 console.log(out)

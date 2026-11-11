@@ -110,7 +110,7 @@ test('管理界面重做：账号生命周期、详情抽屉、批量操作、�
   const downloadPromise = page.waitForEvent('download')
   await page.locator('#batches-list a').filter({ hasText: '下载' }).first().click()
   const download = await downloadPromise
-  assert.match(download.suggestedFilename(), /60个/)
+  assert.match(download.suggestedFilename(), /60条/)
 
   // 切换抽屉标签：检查记录
   await page.getByRole('button', { name: '检查记录', exact: true }).click()

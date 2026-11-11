@@ -22,30 +22,44 @@ export function chinaTime(date = new Date()) {
 
 export function formatExportRelativePath({ account, count, at = new Date(), store = null, exportRoot = '' }) {
   const rawName = (account.label?.trim() || account.nickname?.trim() || '未命名')
-  const safeName = rawName.replace(/[\\/:*?"<>|]/g, '').slice(0, 30).trim() || '未命名'
-  const safeOwner = (account.owner || account.profile || 'unknown').replace(/[\\/:*?"<>|]/g, '')
+  const safeName = rawName.replace(/[\x00-\x1f\\/:*?"<>|]/g, '').slice(0, 30).trim() || '未命名'
+  const safeOwner = String(account.owner || account.uid || account.profile || 'unknown').replace(/[\x00-\x1f\\/:*?"<>|]/g, '')
   const dirName = `${safeName}_${safeOwner}`
 
-  const dateObj = typeof at === 'string' ? new Date(at) : at
+  const dateObj = (typeof at === 'string' ? new Date(at) : at) || new Date()
+  const validDate = Number.isFinite(dateObj.getTime()) ? dateObj : new Date()
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('zh-CN', {
       timeZone: 'Asia/Shanghai',
       year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
       minute: '2-digit',
       hourCycle: 'h23',
-    }).formatToParts(dateObj).map(p => [p.type, p.value])
+    }).formatToParts(validDate).map(p => [p.type, p.value])
   )
-  const baseFile = `${parts.month}.${parts.day} ${parts.hour}.${parts.minute} ${count}个 ${safeName}`
+  const timeStr = `${parts.month}.${parts.day}_${parts.hour}.${parts.minute}`
+  const uidPart = safeOwner.startsWith('UID') ? safeOwner : `UID${safeOwner}`
+  const baseFile = `${timeStr}_${safeName}_${uidPart}_${count}条`
 
   let candidateFile = `${baseFile}.txt`
   let index = 1
   while (true) {
     const candidateRelative = join(dirName, candidateFile)
     const fullDest = exportRoot ? join(exportRoot, candidateRelative) : candidateRelative
-    const inDb = store?.db?.prepare('SELECT 1 FROM batches WHERE relative_path = ?').get(candidateRelative)
+    let inDb = false
+    if (store?.db) {
+      if (store.batches && typeof store.target === 'function') {
+        try {
+          inDb = Boolean(store.db.prepare('SELECT 1 FROM batches WHERE path = ?').get(fullDest))
+        } catch {}
+      } else {
+        try {
+          inDb = Boolean(store.db.prepare('SELECT 1 FROM batches WHERE relative_path = ?').get(candidateRelative))
+        } catch {}
+      }
+    }
     if (!existsSync(fullDest) && !inDb) {
       return candidateRelative
     }

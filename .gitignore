@@ -1,15 +1,37 @@
+# Dependencies
 node_modules/
+
+# Environment and sensitive data
 .env
 .env.*
+*.env
+profiles/
+
+# Local database and observation data
 observations.json
 observations.json.*.tmp
 weibo-a-observations.json*
-profiles/
-dist/
-.build/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
 exports/
-启动新版微博粉丝助手.exe
 粉丝UID导出/
+
+# Build artifacts & portable packages
+dist/
+.build/
+.audit-tmp/
+微博粉丝助手/
+启动新版微博粉丝助手.exe
+*.exe
+
+# Logs and temp files
+*.log
+*.tmp
+
+# IDE & OS files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
